@@ -1,6 +1,6 @@
 -- Enhanced Follow Player GUI for Mobile & PC
--- Version: 1.8
--- FIXED: Random side/follow choice on radius entry, Anti-seat with victim seat detection
+-- Version: 1.9
+-- UPDATED: Integrated Roblox PathfindingService for obstacle navigation
 
 local player = game.Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
@@ -315,17 +315,16 @@ local targetPlayer = nil
 local isFollowing = false
 local followConnection = nil
 
+-- Constants
 local STOP_DISTANCE = 8
 local MAX_DISTANCE = 50
 local UPDATE_RATE = 0.2
-local STORED_POSITIONS = {}
-local MAX_HISTORY = 60
-local MIMIC_DELAY = 15
+local PATH_UPDATE_INTERVAL = 0.5  -- Update path every 0.5 seconds
 
--- Looking behavior variables - UPDATED
-local LOOK_DURATION = 1.5  -- Target must look at follower for 1.5 seconds
-local LOOK_AWAY_DELAY = 1.5  -- CHANGED: 1.5 second timer after target looks away (was 2)
-local LOOK_AT_DIRECTION_BRIEFLY = 0.5  -- Look at target's direction for just 0.5 seconds (was 3)
+-- Looking behavior variables
+local LOOK_DURATION = 1.5
+local LOOK_AWAY_DELAY = 1.5
+local LOOK_AT_DIRECTION_BRIEFLY = 0.5
 
 -- State tracking
 local isBeingLookedAt = false
@@ -340,6 +339,12 @@ local wasInRadius = false
 local currentBehavior = nil  -- "left", "right", or "follow"
 local isExecutingBehavior = false
 local lastDistanceUpdate = 0
+
+-- NEW: Pathfinding variables
+local currentPath = nil
+local currentWaypointIndex = 0
+local isComputingPath = false
+local lastPathComputeTime = 0
 
 -- ANTI-SEAT SYSTEM
 local antiSeatConnection = nil
@@ -356,7 +361,6 @@ local function activateAntiSeat()
 	if character then
 		local humanoid = character:FindFirstChild("Humanoid")
 		if humanoid then
-			-- Disconnect old connection if exists
 			if antiSeatConnection then
 				antiSeatConnection:Disconnect()
 				antiSeatConnection = nil
@@ -364,29 +368,22 @@ local function activateAntiSeat()
 
 			antiSeatConnection = humanoid.Seated:Connect(function(isSeated, seat)
 				if isSeated then
-					-- Check if victim is also seated
 					local victimSeated = false
 					if targetPlayer and targetPlayer.Character then
 						local targetHumanoid = targetPlayer.Character:FindFirstChild("Humanoid")
 						if targetHumanoid and checkVictimSeated(targetHumanoid) then
 							victimSeated = true
 							print("Anti-seat: Victim is seated, allowing follower to sit")
-							return -- Allow follower to sit if victim is also seated
+							return
 						end
 					end
 
-					-- Victim is NOT seated, force follower to stand up
 					task.wait(0.3)
-
-					-- Force unseat
 					humanoid.Sit = false
 					if seat then
 						seat:Sit(nil)
 					end
-
-					-- Force jump properly
 					humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-
 					print("Anti-seat: Forced to jump off seat (victim is not seated)")
 				end
 			end)
@@ -436,24 +433,17 @@ local function findPlayer(searchText)
 	return nil
 end
 
--- Function to check if target is looking at follower (22 DEGREES)
 local function isTargetLookingAtFollower(targetRoot, followerRoot)
 	if not targetRoot or not followerRoot then return false end
 
-	-- Get direction from target to follower
 	local toFollower = (followerRoot.Position - targetRoot.Position).Unit
-
-	-- Get target's current look direction (forward vector of HumanoidRootPart)
 	local targetLookDirection = targetRoot.CFrame.LookVector
-
-	-- Check if target is looking roughly at follower (within 22 degrees)
 	local dotProduct = targetLookDirection:Dot(toFollower)
 	local angle = math.deg(math.acos(math.clamp(dotProduct, -1, 1)))
 
-	return angle < 22  -- Looking within 22 degrees counts as "looking at"
+	return angle < 22
 end
 
--- NEW: Function to get stay beside position
 local function getStayBesidePosition(targetRoot, side)
 	if side == "left" then
 		return targetRoot.CFrame * CFrame.new(-4, 0, 0)
@@ -472,8 +462,10 @@ local function stopFollowing()
 	wasInRadius = false
 	currentBehavior = nil
 	isExecutingBehavior = false
+	currentPath = nil
+	currentWaypointIndex = 0
+	isComputingPath = false
 
-	-- DEACTIVATE anti-seat when stopping following
 	deactivateAntiSeat()
 
 	if followConnection then
@@ -488,37 +480,26 @@ local function stopFollowing()
 			humanoid:Move(Vector3.new(0, 0, 0))
 		end
 	end
-
-	STORED_POSITIONS = {}
 end
 
--- Function to make character look at a position
 local function lookAtPosition(character, targetPosition)
 	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
 	if not humanoidRootPart then return end
 
-	-- Calculate direction to look
 	local lookDirection = (targetPosition - humanoidRootPart.Position).Unit
-	lookDirection = Vector3.new(lookDirection.X, 0, lookDirection.Z) -- Keep horizontal only
-
-	-- Set the character's look direction
+	lookDirection = Vector3.new(lookDirection.X, 0, lookDirection.Z)
 	humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position, humanoidRootPart.Position + lookDirection)
 end
 
--- Function to make character look in a specific direction
 local function lookInDirection(character, direction)
 	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
 	if not humanoidRootPart then return end
 
-	-- Normalize the direction
 	direction = direction.Unit
-	direction = Vector3.new(direction.X, 0, direction.Z) -- Keep horizontal only
-
-	-- Set the character's look direction
+	direction = Vector3.new(direction.X, 0, direction.Z)
 	humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position, humanoidRootPart.Position + direction)
 end
 
--- Get a point in front of the target where they're looking
 local function getPointInTargetLookDirection(targetRoot, distance)
 	local lookDirection = targetRoot.CFrame.LookVector
 	return targetRoot.Position + (lookDirection * distance)
@@ -529,11 +510,9 @@ local function startFollowing()
 		followConnection:Disconnect()
 	end
 
-	-- ACTIVATE anti-seat when starting to follow
 	activateAntiSeat()
 
 	local lastUpdate = 0
-	STORED_POSITIONS = {}
 	isBeingLookedAt = false
 	isLookingBack = false
 	shouldLookAtDirection = false
@@ -541,11 +520,15 @@ local function startFollowing()
 	lookAwayStartTime = 0
 	lookAtDirectionTime = 0
 
-	-- NEW: Reset behavior states
 	wasInRadius = false
 	currentBehavior = nil
 	isExecutingBehavior = false
 	lastDistanceUpdate = 0
+
+	currentPath = nil
+	currentWaypointIndex = 0
+	isComputingPath = false
+	lastPathComputeTime = 0
 
 	followConnection = RunService.Heartbeat:Connect(function(deltaTime)
 		if not isFollowing or not targetPlayer or not targetPlayer.Parent then
@@ -570,12 +553,10 @@ local function startFollowing()
 		local distance = (targetRoot.Position - humanoidRootPart.Position).Magnitude
 		local currentTime = tick()
 
-		-- NEW: Random behavior selection when entering radius
 		if distance <= STOP_DISTANCE then
 			if not wasInRadius then
-				-- Just entered radius, choose random behavior
 				wasInRadius = true
-				local randomChoice = math.random(1, 3)  -- 1: left, 2: right, 3: follow
+				local randomChoice = math.random(1, 3)
 
 				if randomChoice == 1 then
 					currentBehavior = "left"
@@ -595,38 +576,31 @@ local function startFollowing()
 				isExecutingBehavior = true
 			end
 		else
-			-- Left radius, reset for next entry
 			wasInRadius = false
 			currentBehavior = nil
 			isExecutingBehavior = false
 		end
 
-		-- NEW: Execute chosen behavior
 		if isExecutingBehavior and currentBehavior then
 			if currentBehavior == "left" or currentBehavior == "right" then
-				-- Move to the chosen side
 				local sidePos = getStayBesidePosition(targetRoot, currentBehavior)
 				humanoid:MoveTo(sidePos.Position)
 
-				-- Check if we reached the side position
 				local distanceToSide = (sidePos.Position - humanoidRootPart.Position).Magnitude
 
 				if distanceToSide < 2 then
-					-- Reached side, now switch to follow mode
 					currentBehavior = "follow"
 					isExecutingBehavior = false
 					print("Reached " .. currentBehavior .. " side, switching to follow mode")
 				else
-					-- Still moving to side
 					StatusLabel.Text = "Moving to " .. currentBehavior .. " side (" .. math.floor(distance) .. " studs)"
 					StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
-					return -- Skip other behaviors while moving to side
+					return
 				end
 			end
 		end
 
-		-- Update status text
-		if currentTime - lastDistanceUpdate > 0.5 then -- Update every 0.5 seconds
+		if currentTime - lastDistanceUpdate > 0.5 then
 			if not isBeingLookedAt and not isLookingBack and not shouldLookAtDirection then
 				if currentBehavior == "follow" and wasInRadius then
 					StatusLabel.Text = string.format("Following in radius: %.0f studs", distance)
@@ -638,23 +612,18 @@ local function startFollowing()
 			lastDistanceUpdate = currentTime
 		end
 
-		-- Check if target is looking at follower (22 degrees) AND within 8 studs
 		local targetLooking = isTargetLookingAtFollower(targetRoot, humanoidRootPart)
 
 		if distance <= STOP_DISTANCE and targetLooking then
-			-- STEP 1: Victim is looking at follower (within 22 degrees)
 			if not isBeingLookedAt then
-				-- Just started being looked at
 				isBeingLookedAt = true
 				lookStartTime = currentTime
 				shouldLookAtDirection = false
 				StatusLabel.Text = string.format("Target looking at you: %.0f studs", distance)
 				StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
 			else
-				-- Continue being looked at
 				local lookDuration = currentTime - lookStartTime
 
-				-- STEP 2: After 2 seconds, look back at target
 				if lookDuration >= LOOK_DURATION and not isLookingBack then
 					isLookingBack = true
 					shouldLookAtDirection = false
@@ -662,60 +631,48 @@ local function startFollowing()
 					StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
 				end
 
-				-- Look at target if we're in step 2
 				if isLookingBack then
 					lookAtPosition(character, targetRoot.Position)
 				end
 			end
-			lookAwayStartTime = 0  -- Reset look away timer
+			lookAwayStartTime = 0
 		else
-			-- Target is NOT looking at follower (outside 22 degrees)
 			if isBeingLookedAt then
-				-- Target just looked away
 				isBeingLookedAt = false
 
 				if isLookingBack then
-					-- STEP 3: Start 1.5-second timer after target looks away
 					lookAwayStartTime = currentTime
 					StatusLabel.Text = string.format("Target looked away (1.5s): %.0f studs", distance)
 					StatusLabel.TextColor3 = Color3.fromRGB(255, 180, 100)
 				else
-					-- Wasn't looking back yet, just reset
 					isLookingBack = false
 					shouldLookAtDirection = false
 				end
 			end
 
-			-- Handle the 1.5-second timer after target looks away
 			if lookAwayStartTime > 0 then
 				local timeSinceLookAway = currentTime - lookAwayStartTime
 
 				if timeSinceLookAway < LOOK_AWAY_DELAY then
-					-- Still in 1.5-second delay
 					local timeLeft = math.ceil(LOOK_AWAY_DELAY - timeSinceLookAway)
 					StatusLabel.Text = string.format("Waiting (1.5s): %.1fs, %.0f studs", LOOK_AWAY_DELAY - timeSinceLookAway, distance)
 					StatusLabel.TextColor3 = Color3.fromRGB(255, 180, 100)
 				else
-					-- 1.5 seconds passed, look at target's direction briefly (0.5 seconds)
 					if not shouldLookAtDirection then
-						-- Start looking at target's direction
 						shouldLookAtDirection = true
 						lookAtDirectionTime = currentTime
 					end
 
-					-- Look at where target is CURRENTLY looking for 0.5 seconds
 					if shouldLookAtDirection then
 						local timeLookingAtDirection = currentTime - lookAtDirectionTime
 
 						if timeLookingAtDirection < LOOK_AT_DIRECTION_BRIEFLY then
-							-- Get a point 20 studs in front of where target is looking
 							local pointToLookAt = getPointInTargetLookDirection(targetRoot, 20)
 							lookAtPosition(character, pointToLookAt)
 
 							StatusLabel.Text = string.format("Looking where target is facing: %.0f studs", distance)
 							StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
 						else
-							-- 0.5 seconds passed, stop everything and return to normal
 							isLookingBack = false
 							shouldLookAtDirection = false
 							lookAwayStartTime = 0
@@ -727,23 +684,18 @@ local function startFollowing()
 			end
 		end
 
-		-- Regular following behavior
 		if not isLookingBack and not shouldLookAtDirection then
-			-- Check if direct path is blocked
 			local ray = Ray.new(humanoidRootPart.Position, (targetRoot.Position - humanoidRootPart.Position).Unit * math.min(distance, 100))
-			local hitPart, hitPosition = workspace:FindPartOnRayWithIgnoreList(ray, {character, targetChar})
+			local hitPart = workspace:FindPartOnRayWithIgnoreList(ray, {character, targetChar})
 
 			local isPathBlocked = hitPart and hitPart.CanCollide
 
 			if isPathBlocked then
-				-- Path blocked! Clear old stored positions that might lead through wall
-				STORED_POSITIONS = {}
-				StatusLabel.Text = string.format("Path blocked - clearing history: %.0f studs", distance)
+				StatusLabel.Text = string.format("Path blocked - calculating new route: %.0f studs", distance)
 				StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
 			end
 
 			if distance <= STOP_DISTANCE then
-				-- Stop moving when within 8 studs
 				humanoid:MoveTo(humanoidRootPart.Position)
 				if not isBeingLookedAt and not isLookingBack and not shouldLookAtDirection then
 					StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
@@ -751,68 +703,60 @@ local function startFollowing()
 				return
 			end
 
-			table.insert(STORED_POSITIONS, {
-				position = targetRoot.Position,
-				isJumping = targetHumanoid:GetState() == Enum.HumanoidStateType.Jumping or targetHumanoid:GetState() == Enum.HumanoidStateType.Freefall,
-				timestamp = tick()
-			})
+			if currentTime - lastPathComputeTime >= PATH_UPDATE_INTERVAL and not isComputingPath then
+				lastPathComputeTime = currentTime
+				isComputingPath = true
 
-			if #STORED_POSITIONS > MAX_HISTORY then
-				table.remove(STORED_POSITIONS, 1)
-			end
+				local path = PathfindingService:CreatePath({
+					AgentRadius = 2,
+					AgentHeight = 5,
+					AgentCanJump = true,
+					AgentJumpHeight = 7.5,
+					AgentMaxSlope = 45,
+					WaypointSpacing = 4
+				})
 
-			if #STORED_POSITIONS >= MIMIC_DELAY then
-				local mimicIndex = math.max(1, #STORED_POSITIONS - MIMIC_DELAY + 1)
-				local storedData = STORED_POSITIONS[mimicIndex]
+				local success, errorMsg = pcall(function()
+					path:ComputeAsync(humanoidRootPart.Position, targetRoot.Position)
+				end)
 
-				if storedData then
-					humanoid:MoveTo(storedData.position)
+				if success and path.Status == Enum.PathStatus.Success then
+					currentPath = path
+					currentWaypointIndex = 1
+					local waypoints = path:GetWaypoints()
 
-					if storedData.isJumping and not humanoid.Jump then
-						humanoid.Jump = true
-						StatusLabel.Text = string.format("Jumping: %.0f studs away", distance)
-						StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
-					else
-						StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-					end
-				end
-			else
-				lastUpdate = lastUpdate + deltaTime
+					for i = currentWaypointIndex, #waypoints do
+						if not isFollowing or currentPath ~= path then break end
 
-				if lastUpdate >= UPDATE_RATE then
-					lastUpdate = 0
+						local waypoint = waypoints[i]
+						humanoid:MoveTo(waypoint.Position)
 
-					if distance > MAX_DISTANCE then
-						local path = PathfindingService:CreatePath({
-							AgentRadius = 2,
-							AgentHeight = 5,
-							AgentCanJump = true,
-							AgentJumpHeight = 7.5,
-							AgentMaxSlope = 45
-						})
+						if waypoint.Action == Enum.PathWaypointAction.Jump then
+							humanoid.Jump = true
+						end
 
-						local success = pcall(function()
-							path:ComputeAsync(humanoidRootPart.Position, targetRoot.Position)
+						local waypointReached = false
+						local moveToFinished
+						moveToFinished = humanoid.MoveToFinished:Connect(function(reached)
+							waypointReached = reached
+							moveToFinished:Disconnect()
 						end)
 
-						if success and path.Status == Enum.PathStatus.Success then
-							local waypoints = path:GetWaypoints()
-							if #waypoints > 1 then
-								humanoid:MoveTo(waypoints[2].Position)
-							end
-						else
-							humanoid:MoveTo(targetRoot.Position)
+						local startWait = tick()
+						while not waypointReached and isFollowing and currentPath == path do
+							if tick() - startWait > 5 then break end
+							task.wait()
 						end
-					else
-						-- EVEN WHEN CLOSE, USE STORED POSITIONS IF AVAILABLE
-						if #STORED_POSITIONS > 0 then
-							local lastStored = STORED_POSITIONS[#STORED_POSITIONS]
-							humanoid:MoveTo(lastStored.position)
-						else
-							humanoid:MoveTo(targetRoot.Position)
-						end
+
+						currentWaypointIndex = i + 1
 					end
+				else
+					humanoid:MoveTo(targetRoot.Position)
+					StatusLabel.Text = string.format("Pathfinding failed, moving directly: %.0f studs", distance)
+					StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
 				end
+
+				isComputingPath = false
 			end
 		end
 	end)
