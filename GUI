@@ -1,4 +1,4 @@
--- Follow Player GUI - Clean Pathfinding Version
+-- Follow Player GUI - Roblox Pathfinding Only
 local player = game.Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
@@ -17,7 +17,7 @@ if oldGui then
 		local oldContentContainer = oldMainFrame:FindFirstChild("ContentContainer")
 		if oldContentContainer then
 			wasMinimized = not oldContentContainer.Visible
-			
+
 			local oldSearchBarContainer = oldContentContainer:FindFirstChild("SearchBarContainer")
 			if oldSearchBarContainer then
 				local oldSearchBar = oldSearchBarContainer:FindFirstChild("SearchBar")
@@ -345,14 +345,14 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 
+-- Auto-resume connection
+local characterAddedConnection = nil
 local targetPlayer = nil
 local isFollowing = false
 local followConnection = nil
 local lastTargetName = ""
 
 local STOP_DISTANCE = 8
-local MAX_DISTANCE = 50
-local UPDATE_RATE = 0.2
 local PATH_UPDATE_INTERVAL = 0.5
 
 local LOOK_DURATION = 1.5
@@ -378,10 +378,6 @@ local lastPathComputeTime = 0
 
 local antiSeatConnection = nil
 local antiSeatActive = false
-
--- Respawn system - SIMPLIFIED
-local waitingForRespawn = false
-local characterAddedConnection = nil
 
 local function checkVictimSeated(targetHumanoid)
 	return targetHumanoid and targetHumanoid.Sit
@@ -482,81 +478,8 @@ local function getStayBesidePosition(targetRoot, side)
 	return targetRoot.CFrame
 end
 
--- SIMPLE death/respawn handling
-local function handleCharacterDeath()
-	if not isFollowing then return end
-	
-	waitingForRespawn = true
-	StatusLabel.Text = "You died - Waiting for respawn..."
-	StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 50)
-	
-	-- Store target name
-	lastTargetName = targetPlayer and targetPlayer.Name or ""
-	
-	-- Disconnect current follow loop
-	if followConnection then
-		followConnection:Disconnect()
-		followConnection = nil
-	end
-	
-	-- Set up respawn listener
-	if characterAddedConnection then
-		characterAddedConnection:Disconnect()
-	end
-	
-	characterAddedConnection = player.CharacterAdded:Connect(function(newCharacter)
-		-- Wait for character to fully load
-		task.wait(2)
-		
-		if waitingForRespawn and isFollowing then
-			-- Reset pathfinding state
-			currentPath = nil
-			currentWaypointIndex = 0
-			isComputingPath = false
-			
-			-- Check if target still exists
-			if not targetPlayer or not targetPlayer.Parent then
-				if lastTargetName ~= "" then
-					targetPlayer = findPlayer(lastTargetName)
-					if not targetPlayer then
-						StatusLabel.Text = "Target player left during respawn"
-						StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
-						isFollowing = false
-						waitingForRespawn = false
-						return
-					end
-				else
-					StatusLabel.Text = "Target player not found"
-					StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
-					isFollowing = false
-					waitingForRespawn = false
-					return
-				end
-			end
-			
-			-- Resume following
-			StatusLabel.Text = "Respawned - Resuming follow..."
-			StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-			waitingForRespawn = false
-			
-			-- Restart follow loop
-			startFollowing()
-		end
-	end)
-end
-
-local function isCharacterDead(character)
-	if not character then return true end
-	
-	local humanoid = character:FindFirstChild("Humanoid")
-	if not humanoid then return true end
-	
-	return humanoid.Health <= 0
-end
-
 local function stopFollowing()
 	isFollowing = false
-	waitingForRespawn = false
 	targetPlayer = nil
 	isBeingLookedAt = false
 	isLookingBack = false
@@ -570,7 +493,7 @@ local function stopFollowing()
 
 	deactivateAntiSeat()
 
-	-- Clean up respawn connection
+	-- Clean up auto-resume connection
 	if characterAddedConnection then
 		characterAddedConnection:Disconnect()
 		characterAddedConnection = nil
@@ -656,13 +579,53 @@ local function followCurrentPathWaypoints(character, humanoid, humanoidRootPart,
 	return true
 end
 
+-- Function to handle character respawn and resume following
+local function handleCharacterRespawn()
+	if isFollowing and targetPlayer and targetPlayer.Parent then
+		-- Wait for character to fully load
+		task.wait(0.5)
+		
+		-- Check if target still exists
+		local foundPlayer = findPlayer(targetPlayer.Name)
+		if foundPlayer and foundPlayer.Parent then
+			-- Clean up old connections
+			if followConnection then
+				followConnection:Disconnect()
+				followConnection = nil
+			end
+			
+			-- Reset pathfinding state
+			currentPath = nil
+			currentWaypointIndex = 0
+			isComputingPath = false
+			
+			-- Start following again
+			startFollowing()
+			
+			-- Update status
+			StatusLabel.Text = "Resumed following: " .. foundPlayer.DisplayName
+			StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+		else
+			-- Target left
+			stopFollowing()
+			StatusLabel.Text = "Target player left"
+			StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+		end
+	end
+end
+
 local function startFollowing()
 	if followConnection then
 		followConnection:Disconnect()
-		followConnection = nil
 	end
 
 	activateAntiSeat()
+
+	-- Connect character respawn event
+	if characterAddedConnection then
+		characterAddedConnection:Disconnect()
+	end
+	characterAddedConnection = player.CharacterAdded:Connect(handleCharacterRespawn)
 
 	local lastUpdate = 0
 	isBeingLookedAt = false
@@ -684,7 +647,7 @@ local function startFollowing()
 
 	followConnection = RunService.Heartbeat:Connect(function(deltaTime)
 		if not isFollowing then return end
-		
+
 		if not targetPlayer or not targetPlayer.Parent then
 			stopFollowing()
 			StatusLabel.Text = "Target player left"
@@ -694,15 +657,6 @@ local function startFollowing()
 
 		local character = player.Character
 		local targetChar = targetPlayer.Character
-
-		-- Check if we died
-		if character and isCharacterDead(character) and not waitingForRespawn then
-			handleCharacterDeath()
-			return
-		end
-
-		-- Don't run follow logic if waiting for respawn
-		if waitingForRespawn then return end
 
 		if not character or not targetChar then 
 			return 
@@ -750,8 +704,6 @@ local function startFollowing()
 		if isExecutingBehavior and currentBehavior then
 			if currentBehavior == "left" or currentBehavior == "right" then
 				local sidePos = getStayBesidePosition(targetRoot, currentBehavior)
-				
-				-- Just use direct movement for side positioning
 				humanoid:MoveTo(sidePos.Position)
 
 				local distanceToSide = (sidePos.Position - humanoidRootPart.Position).Magnitude
@@ -870,7 +822,7 @@ local function startFollowing()
 				return
 			end
 
-			-- Pure Roblox pathfinding - no direct mode fallback
+			-- Pure Roblox Pathfinding
 			if currentPath then
 				local stillFollowingPath = followCurrentPathWaypoints(character, humanoid, humanoidRootPart, targetRoot)
 
@@ -896,7 +848,6 @@ local function startFollowing()
 						currentWaypointIndex = 1
 						isComputingPath = false
 					else
-						-- Pathfinding failed, just use direct movement for this attempt
 						humanoid:MoveTo(targetRoot.Position)
 						currentPath = nil
 						currentWaypointIndex = 0
@@ -927,7 +878,6 @@ local function startFollowing()
 					currentWaypointIndex = 1
 					isComputingPath = false
 				else
-					-- Pathfinding failed, just use direct movement
 					humanoid:MoveTo(targetRoot.Position)
 					currentPath = nil
 					currentWaypointIndex = 0
@@ -936,7 +886,6 @@ local function startFollowing()
 					StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
 				end
 			elseif not currentPath and not isComputingPath then
-				-- No active path, use direct movement temporarily
 				humanoid:MoveTo(targetRoot.Position)
 			end
 		end
@@ -945,11 +894,6 @@ end
 
 local function updateSearchPreview()
 	local searchText = SearchBar.Text
-
-	-- Don't update if waiting for respawn
-	if waitingForRespawn then
-		return
-	end
 
 	if searchText == "" then
 		if not isFollowing then
@@ -986,19 +930,11 @@ FollowButton.MouseButton1Click:Connect(function()
 	end
 
 	local foundPlayer = findPlayer(searchText)
-	
+
 	if foundPlayer then
 		targetPlayer = foundPlayer
 		isFollowing = true
-		waitingForRespawn = false
 		lastTargetName = foundPlayer.Name
-		
-		-- Clean up any existing respawn connection
-		if characterAddedConnection then
-			characterAddedConnection:Disconnect()
-			characterAddedConnection = nil
-		end
-		
 		startFollowing()
 		StatusLabel.Text = "Started following: " .. foundPlayer.DisplayName
 		StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
@@ -1029,34 +965,22 @@ end)
 -- Auto-resume following if script re-executes while following
 local function checkAndResumeFollowing()
 	if lastTargetName ~= "" then
-		-- Try to find the player again
 		local foundPlayer = findPlayer(lastTargetName)
-		if foundPlayer then
+		if foundPlayer and foundPlayer.Parent then
 			targetPlayer = foundPlayer
 			isFollowing = true
-			waitingForRespawn = false
-			
-			-- Clean up any existing connections
-			if followConnection then
-				followConnection:Disconnect()
-				followConnection = nil
-			end
-			
-			if characterAddedConnection then
-				characterAddedConnection:Disconnect()
-				characterAddedConnection = nil
-			end
-			
+			lastTargetName = foundPlayer.Name
 			startFollowing()
 			StatusLabel.Text = "Resumed following: " .. foundPlayer.DisplayName
 			StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
 			SearchBar.Text = foundPlayer.Name
 		else
 			lastTargetName = ""
+			StatusLabel.Text = "Could not resume - player not found"
+			StatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
 		end
 	end
 end
 
--- Check after a short delay to ensure everything is loaded
 task.wait(1)
 checkAndResumeFollowing()
