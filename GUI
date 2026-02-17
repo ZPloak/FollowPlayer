@@ -2,985 +2,1021 @@
 local player = game.Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
 
-local savedPosition = nil
-local savedSize = nil
-local savedSearchText = ""
-local wasMinimized = false
+-- Catch any hidden errors without breaking the game
+local success, err = pcall(function()
 
-local oldGui = PlayerGui:FindFirstChild("FollowPlayerGui")
-if oldGui then
-	local oldMainFrame = oldGui:FindFirstChild("MainFrame")
-	if oldMainFrame then
-		savedPosition = oldMainFrame.Position
-		savedSize = oldMainFrame.Size
+	local savedPosition = nil
+	local savedSize = nil
+	local savedSearchText = ""
+	local wasMinimized = false
 
-		local oldContentContainer = oldMainFrame:FindFirstChild("ContentContainer")
-		if oldContentContainer then
-			wasMinimized = not oldContentContainer.Visible
+	local oldGui = PlayerGui:FindFirstChild("FollowPlayerGui")
+	if oldGui then
+		local oldMainFrame = oldGui:FindFirstChild("MainFrame")
+		if oldMainFrame then
+			savedPosition = oldMainFrame.Position
+			savedSize = oldMainFrame.Size
 
-			local oldSearchBarContainer = oldContentContainer:FindFirstChild("SearchBarContainer")
-			if oldSearchBarContainer then
-				local oldSearchBar = oldSearchBarContainer:FindFirstChild("SearchBar")
-				if oldSearchBar then
-					savedSearchText = oldSearchBar.Text
+			local oldContentContainer = oldMainFrame:FindFirstChild("ContentContainer")
+			if oldContentContainer then
+				wasMinimized = not oldContentContainer.Visible
+
+				local oldSearchBarContainer = oldContentContainer:FindFirstChild("SearchBarContainer")
+				if oldSearchBarContainer then
+					local oldSearchBar = oldSearchBarContainer:FindFirstChild("SearchBar")
+					if oldSearchBar then
+						savedSearchText = oldSearchBar.Text
+					end
 				end
 			end
 		end
+		oldGui:Destroy()
 	end
-	oldGui:Destroy()
-end
 
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "FollowPlayerGui"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = PlayerGui
+	local ScreenGui = Instance.new("ScreenGui")
+	ScreenGui.Name = "FollowPlayerGui"
+	ScreenGui.ResetOnSpawn = false
+	ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	ScreenGui.Parent = PlayerGui
 
-local MainFrame = Instance.new("Frame")
-MainFrame.Name = "MainFrame"
-MainFrame.Parent = ScreenGui
-MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-MainFrame.Size = UDim2.new(0, 380, 0, 280)
-MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-MainFrame.BorderSizePixel = 0
-MainFrame.Active = true
-MainFrame.Draggable = true
+	local MainFrame = Instance.new("Frame")
+	MainFrame.Name = "MainFrame"
+	MainFrame.Parent = ScreenGui
+	MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+	MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+	MainFrame.Size = UDim2.new(0, 380, 0, 280)
+	MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+	MainFrame.BorderSizePixel = 0
+	MainFrame.Active = true
+	MainFrame.Draggable = true
 
-local MainFrameCorner = Instance.new("UICorner")
-MainFrameCorner.CornerRadius = UDim.new(0, 16)
-MainFrameCorner.Parent = MainFrame
+	local MainFrameCorner = Instance.new("UICorner")
+	MainFrameCorner.CornerRadius = UDim.new(0, 16)
+	MainFrameCorner.Parent = MainFrame
 
-local MainFrameStroke = Instance.new("UIStroke")
-MainFrameStroke.Color = Color3.fromRGB(100, 100, 255)
-MainFrameStroke.Thickness = 2
-MainFrameStroke.Transparency = 0.5
-MainFrameStroke.Parent = MainFrame
+	local MainFrameStroke = Instance.new("UIStroke")
+	MainFrameStroke.Color = Color3.fromRGB(100, 100, 255)
+	MainFrameStroke.Thickness = 2
+	MainFrameStroke.Transparency = 0.5
+	MainFrameStroke.Parent = MainFrame
 
-local Header = Instance.new("Frame")
-Header.Name = "Header"
-Header.Parent = MainFrame
-Header.Size = UDim2.new(1, 0, 0, 60)
-Header.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-Header.BorderSizePixel = 0
+	local Header = Instance.new("Frame")
+	Header.Name = "Header"
+	Header.Parent = MainFrame
+	Header.Size = UDim2.new(1, 0, 0, 60)
+	Header.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	Header.BorderSizePixel = 0
 
-local HeaderCorner = Instance.new("UICorner")
-HeaderCorner.CornerRadius = UDim.new(0, 16)
-HeaderCorner.Parent = Header
+	local HeaderCorner = Instance.new("UICorner")
+	HeaderCorner.CornerRadius = UDim.new(0, 16)
+	HeaderCorner.Parent = Header
 
-local Title = Instance.new("TextLabel")
-Title.Name = "Title"
-Title.Parent = Header
-Title.Position = UDim2.new(0, 15, 0, 0)
-Title.Size = UDim2.new(1, -80, 1, 0)
-Title.BackgroundTransparency = 1
-Title.Font = Enum.Font.GothamBold
-Title.Text = "👤 Follow Player"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 22
-Title.TextXAlignment = Enum.TextXAlignment.Left
+	local Title = Instance.new("TextLabel")
+	Title.Name = "Title"
+	Title.Parent = Header
+	Title.Position = UDim2.new(0, 15, 0, 0)
+	Title.Size = UDim2.new(1, -80, 1, 0)
+	Title.BackgroundTransparency = 1
+	Title.Font = Enum.Font.GothamBold
+	Title.Text = "👤 Follow Player"
+	Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+	Title.TextSize = 22
+	Title.TextXAlignment = Enum.TextXAlignment.Left
 
-local MinimizeButton = Instance.new("TextButton")
-MinimizeButton.Name = "MinimizeButton"
-MinimizeButton.Parent = Header
-MinimizeButton.AnchorPoint = Vector2.new(1, 0.5)
-MinimizeButton.Position = UDim2.new(1, -10, 0.5, 0)
-MinimizeButton.Size = UDim2.new(0, 40, 0, 40)
-MinimizeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-MinimizeButton.BorderSizePixel = 0
-MinimizeButton.Font = Enum.Font.GothamBold
-MinimizeButton.Text = "−"
-MinimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-MinimizeButton.TextSize = 24
-MinimizeButton.AutoButtonColor = false
+	local MinimizeButton = Instance.new("TextButton")
+	MinimizeButton.Name = "MinimizeButton"
+	MinimizeButton.Parent = Header
+	MinimizeButton.AnchorPoint = Vector2.new(1, 0.5)
+	MinimizeButton.Position = UDim2.new(1, -10, 0.5, 0)
+	MinimizeButton.Size = UDim2.new(0, 40, 0, 40)
+	MinimizeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+	MinimizeButton.BorderSizePixel = 0
+	MinimizeButton.Font = Enum.Font.GothamBold
+	MinimizeButton.Text = "−"
+	MinimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	MinimizeButton.TextSize = 24
+	MinimizeButton.AutoButtonColor = false
 
-local MinimizeCorner = Instance.new("UICorner")
-MinimizeCorner.CornerRadius = UDim.new(0, 10)
-MinimizeCorner.Parent = MinimizeButton
+	local MinimizeCorner = Instance.new("UICorner")
+	MinimizeCorner.CornerRadius = UDim.new(0, 10)
+	MinimizeCorner.Parent = MinimizeButton
 
-local ContentContainer = Instance.new("Frame")
-ContentContainer.Name = "ContentContainer"
-ContentContainer.Parent = MainFrame
-ContentContainer.Position = UDim2.new(0, 0, 0, 70)
-ContentContainer.Size = UDim2.new(1, 0, 1, -70)
-ContentContainer.BackgroundTransparency = 1
+	local ContentContainer = Instance.new("Frame")
+	ContentContainer.Name = "ContentContainer"
+	ContentContainer.Parent = MainFrame
+	ContentContainer.Position = UDim2.new(0, 0, 0, 70)
+	ContentContainer.Size = UDim2.new(1, 0, 1, -70)
+	ContentContainer.BackgroundTransparency = 1
 
-local SearchLabel = Instance.new("TextLabel")
-SearchLabel.Name = "SearchLabel"
-SearchLabel.Parent = ContentContainer
-SearchLabel.Position = UDim2.new(0, 20, 0, 15)
-SearchLabel.Size = UDim2.new(1, -40, 0, 20)
-SearchLabel.BackgroundTransparency = 1
-SearchLabel.Font = Enum.Font.Gotham
-SearchLabel.Text = "Player Username or Display Name"
-SearchLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
-SearchLabel.TextSize = 14
-SearchLabel.TextXAlignment = Enum.TextXAlignment.Left
+	local SearchLabel = Instance.new("TextLabel")
+	SearchLabel.Name = "SearchLabel"
+	SearchLabel.Parent = ContentContainer
+	SearchLabel.Position = UDim2.new(0, 20, 0, 15)
+	SearchLabel.Size = UDim2.new(1, -40, 0, 20)
+	SearchLabel.BackgroundTransparency = 1
+	SearchLabel.Font = Enum.Font.Gotham
+	SearchLabel.Text = "Player Username or Display Name"
+	SearchLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
+	SearchLabel.TextSize = 14
+	SearchLabel.TextXAlignment = Enum.TextXAlignment.Left
 
-local SearchBarContainer = Instance.new("Frame")
-SearchBarContainer.Name = "SearchBarContainer"
-SearchBarContainer.Parent = ContentContainer
-SearchBarContainer.Position = UDim2.new(0, 20, 0, 45)
-SearchBarContainer.Size = UDim2.new(1, -40, 0, 50)
-SearchBarContainer.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-SearchBarContainer.BorderSizePixel = 0
+	local SearchBarContainer = Instance.new("Frame")
+	SearchBarContainer.Name = "SearchBarContainer"
+	SearchBarContainer.Parent = ContentContainer
+	SearchBarContainer.Position = UDim2.new(0, 20, 0, 45)
+	SearchBarContainer.Size = UDim2.new(1, -40, 0, 50)
+	SearchBarContainer.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	SearchBarContainer.BorderSizePixel = 0
 
-local SearchBarCorner = Instance.new("UICorner")
-SearchBarCorner.CornerRadius = UDim.new(0, 10)
-SearchBarCorner.Parent = SearchBarContainer
+	local SearchBarCorner = Instance.new("UICorner")
+	SearchBarCorner.CornerRadius = UDim.new(0, 10)
+	SearchBarCorner.Parent = SearchBarContainer
 
-local SearchIcon = Instance.new("TextLabel")
-SearchIcon.Name = "SearchIcon"
-SearchIcon.Parent = SearchBarContainer
-SearchIcon.Position = UDim2.new(0, 12, 0, 0)
-SearchIcon.Size = UDim2.new(0, 30, 1, 0)
-SearchIcon.BackgroundTransparency = 1
-SearchIcon.Font = Enum.Font.GothamBold
-SearchIcon.Text = "🔍"
-SearchIcon.TextColor3 = Color3.fromRGB(150, 150, 160)
-SearchIcon.TextSize = 20
+	local SearchIcon = Instance.new("TextLabel")
+	SearchIcon.Name = "SearchIcon"
+	SearchIcon.Parent = SearchBarContainer
+	SearchIcon.Position = UDim2.new(0, 12, 0, 0)
+	SearchIcon.Size = UDim2.new(0, 30, 1, 0)
+	SearchIcon.BackgroundTransparency = 1
+	SearchIcon.Font = Enum.Font.GothamBold
+	SearchIcon.Text = "🔍"
+	SearchIcon.TextColor3 = Color3.fromRGB(150, 150, 160)
+	SearchIcon.TextSize = 20
 
-local SearchBar = Instance.new("TextBox")
-SearchBar.Name = "SearchBar"
-SearchBar.Parent = SearchBarContainer
-SearchBar.Position = UDim2.new(0, 45, 0, 0)
-SearchBar.Size = UDim2.new(1, -55, 1, 0)
-SearchBar.BackgroundTransparency = 1
-SearchBar.Font = Enum.Font.Gotham
-SearchBar.PlaceholderColor3 = Color3.fromRGB(100, 100, 110)
-SearchBar.PlaceholderText = "Enter player name..."
-SearchBar.Text = savedSearchText
-SearchBar.TextColor3 = Color3.fromRGB(255, 255, 255)
-SearchBar.TextSize = 16
-SearchBar.TextXAlignment = Enum.TextXAlignment.Left
-SearchBar.ClearTextOnFocus = false
+	local SearchBar = Instance.new("TextBox")
+	SearchBar.Name = "SearchBar"
+	SearchBar.Parent = SearchBarContainer
+	SearchBar.Position = UDim2.new(0, 45, 0, 0)
+	SearchBar.Size = UDim2.new(1, -55, 1, 0)
+	SearchBar.BackgroundTransparency = 1
+	SearchBar.Font = Enum.Font.Gotham
+	SearchBar.PlaceholderColor3 = Color3.fromRGB(100, 100, 110)
+	SearchBar.PlaceholderText = "Enter player name..."
+	SearchBar.Text = savedSearchText
+	SearchBar.TextColor3 = Color3.fromRGB(255, 255, 255)
+	SearchBar.TextSize = 16
+	SearchBar.TextXAlignment = Enum.TextXAlignment.Left
+	SearchBar.ClearTextOnFocus = false
 
-local ButtonsContainer = Instance.new("Frame")
-ButtonsContainer.Name = "ButtonsContainer"
-ButtonsContainer.Parent = ContentContainer
-ButtonsContainer.Position = UDim2.new(0, 20, 0, 120)
-ButtonsContainer.Size = UDim2.new(1, -40, 0, 50)
-ButtonsContainer.BackgroundTransparency = 1
+	local ButtonsContainer = Instance.new("Frame")
+	ButtonsContainer.Name = "ButtonsContainer"
+	ButtonsContainer.Parent = ContentContainer
+	ButtonsContainer.Position = UDim2.new(0, 20, 0, 120)
+	ButtonsContainer.Size = UDim2.new(1, -40, 0, 50)
+	ButtonsContainer.BackgroundTransparency = 1
 
-local ButtonsLayout = Instance.new("UIListLayout")
-ButtonsLayout.Parent = ButtonsContainer
-ButtonsLayout.FillDirection = Enum.FillDirection.Horizontal
-ButtonsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-ButtonsLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-ButtonsLayout.Padding = UDim.new(0, 15)
+	local ButtonsLayout = Instance.new("UIListLayout")
+	ButtonsLayout.Parent = ButtonsContainer
+	ButtonsLayout.FillDirection = Enum.FillDirection.Horizontal
+	ButtonsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	ButtonsLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+	ButtonsLayout.Padding = UDim.new(0, 15)
 
-local FollowButton = Instance.new("TextButton")
-FollowButton.Name = "FollowButton"
-FollowButton.Parent = ButtonsContainer
-FollowButton.Size = UDim2.new(0, 155, 0, 50)
-FollowButton.BackgroundColor3 = Color3.fromRGB(80, 120, 255)
-FollowButton.BorderSizePixel = 0
-FollowButton.Font = Enum.Font.GothamBold
-FollowButton.Text = "✓ Follow"
-FollowButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-FollowButton.TextSize = 18
-FollowButton.AutoButtonColor = false
+	local FollowButton = Instance.new("TextButton")
+	FollowButton.Name = "FollowButton"
+	FollowButton.Parent = ButtonsContainer
+	FollowButton.Size = UDim2.new(0, 155, 0, 50)
+	FollowButton.BackgroundColor3 = Color3.fromRGB(80, 120, 255)
+	FollowButton.BorderSizePixel = 0
+	FollowButton.Font = Enum.Font.GothamBold
+	FollowButton.Text = "✓ Follow"
+	FollowButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	FollowButton.TextSize = 18
+	FollowButton.AutoButtonColor = false
 
-local FollowCorner = Instance.new("UICorner")
-FollowCorner.CornerRadius = UDim.new(0, 10)
-FollowCorner.Parent = FollowButton
+	local FollowCorner = Instance.new("UICorner")
+	FollowCorner.CornerRadius = UDim.new(0, 10)
+	FollowCorner.Parent = FollowButton
 
-local CancelButton = Instance.new("TextButton")
-CancelButton.Name = "CancelButton"
-CancelButton.Parent = ButtonsContainer
-CancelButton.Size = UDim2.new(0, 155, 0, 50)
-CancelButton.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-CancelButton.BorderSizePixel = 0
-CancelButton.Font = Enum.Font.GothamBold
-CancelButton.Text = "✕ Cancel"
-CancelButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-CancelButton.TextSize = 18
-CancelButton.AutoButtonColor = false
+	local CancelButton = Instance.new("TextButton")
+	CancelButton.Name = "CancelButton"
+	CancelButton.Parent = ButtonsContainer
+	CancelButton.Size = UDim2.new(0, 155, 0, 50)
+	CancelButton.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+	CancelButton.BorderSizePixel = 0
+	CancelButton.Font = Enum.Font.GothamBold
+	CancelButton.Text = "✕ Cancel"
+	CancelButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+	CancelButton.TextSize = 18
+	CancelButton.AutoButtonColor = false
 
-local CancelCorner = Instance.new("UICorner")
-CancelCorner.CornerRadius = UDim.new(0, 10)
-CancelCorner.Parent = CancelButton
+	local CancelCorner = Instance.new("UICorner")
+	CancelCorner.CornerRadius = UDim.new(0, 10)
+	CancelCorner.Parent = CancelButton
 
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Name = "StatusLabel"
-StatusLabel.Parent = ContentContainer
-StatusLabel.Position = UDim2.new(0, 20, 1, -35)
-StatusLabel.Size = UDim2.new(1, -40, 0, 25)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Font = Enum.Font.Gotham
-StatusLabel.Text = "Ready"
-StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
-StatusLabel.TextSize = 14
-StatusLabel.TextXAlignment = Enum.TextXAlignment.Center
+	local StatusLabel = Instance.new("TextLabel")
+	StatusLabel.Name = "StatusLabel"
+	StatusLabel.Parent = ContentContainer
+	StatusLabel.Position = UDim2.new(0, 20, 1, -35)
+	StatusLabel.Size = UDim2.new(1, -40, 0, 25)
+	StatusLabel.BackgroundTransparency = 1
+	StatusLabel.Font = Enum.Font.Gotham
+	StatusLabel.Text = "Ready"
+	StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
+	StatusLabel.TextSize = 14
+	StatusLabel.TextXAlignment = Enum.TextXAlignment.Center
 
-if savedPosition then
-	MainFrame.Position = savedPosition
-	if wasMinimized then
-		ContentContainer.Visible = false
-		MainFrame.Size = UDim2.new(0, 380, 0, 60)
-		MinimizeButton.Text = "+"
-		MainFrame.Draggable = false
-	elseif savedSize then
-		MainFrame.Size = savedSize
+	if savedPosition then
+		MainFrame.Position = savedPosition
+		if wasMinimized then
+			ContentContainer.Visible = false
+			MainFrame.Size = UDim2.new(0, 380, 0, 60)
+			MinimizeButton.Text = "+"
+			MainFrame.Draggable = false
+		elseif savedSize then
+			MainFrame.Size = savedSize
+		end
 	end
-end
 
-local function updateForScreenSize()
-	local viewportSize = workspace.CurrentCamera.ViewportSize
-	local isMobile = viewportSize.X < 600
+	local function updateForScreenSize()
+		local viewportSize = workspace.CurrentCamera.ViewportSize
+		local isMobile = viewportSize.X < 600
 
-	if isMobile then
-		MainFrame.Size = UDim2.new(0.9, 0, 0, 300)
-		Title.TextSize = 18
-		SearchBar.TextSize = 14
-		FollowButton.Size = UDim2.new(0, 140, 0, 50)
-		CancelButton.Size = UDim2.new(0, 140, 0, 50)
-		ButtonsLayout.Padding = UDim.new(0, 10)
-	else
-		MainFrame.Size = UDim2.new(0, 380, 0, 280)
-		Title.TextSize = 22
-		SearchBar.TextSize = 16
-		FollowButton.Size = UDim2.new(0, 155, 0, 50)
-		CancelButton.Size = UDim2.new(0, 155, 0, 50)
-		ButtonsLayout.Padding = UDim.new(0, 15)
+		if isMobile then
+			MainFrame.Size = UDim2.new(0.9, 0, 0, 300)
+			Title.TextSize = 18
+			SearchBar.TextSize = 14
+			FollowButton.Size = UDim2.new(0, 140, 0, 50)
+			CancelButton.Size = UDim2.new(0, 140, 0, 50)
+			ButtonsLayout.Padding = UDim.new(0, 10)
+		else
+			MainFrame.Size = UDim2.new(0, 380, 0, 280)
+			Title.TextSize = 22
+			SearchBar.TextSize = 16
+			FollowButton.Size = UDim2.new(0, 155, 0, 50)
+			CancelButton.Size = UDim2.new(0, 155, 0, 50)
+			ButtonsLayout.Padding = UDim.new(0, 15)
+		end
 	end
-end
 
-workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(updateForScreenSize)
-updateForScreenSize()
+	workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(updateForScreenSize)
+	updateForScreenSize()
 
-local function addButtonHover(button, normalColor, hoverColor, pressColor)
-	button.MouseEnter:Connect(function()
-		button.BackgroundColor3 = hoverColor
-	end)
+	local function addButtonHover(button, normalColor, hoverColor, pressColor)
+		button.MouseEnter:Connect(function()
+			button.BackgroundColor3 = hoverColor
+		end)
 
-	button.MouseLeave:Connect(function()
-		button.BackgroundColor3 = normalColor
-	end)
+		button.MouseLeave:Connect(function()
+			button.BackgroundColor3 = normalColor
+		end)
 
-	button.MouseButton1Down:Connect(function()
-		button.BackgroundColor3 = pressColor
-	end)
+		button.MouseButton1Down:Connect(function()
+			button.BackgroundColor3 = pressColor
+		end)
 
-	button.MouseButton1Up:Connect(function()
-		button.BackgroundColor3 = hoverColor
-	end)
-end
-
-addButtonHover(
-	FollowButton,
-	Color3.fromRGB(80, 120, 255),
-	Color3.fromRGB(100, 140, 255),
-	Color3.fromRGB(60, 100, 235)
-)
-
-addButtonHover(
-	CancelButton,
-	Color3.fromRGB(200, 60, 60),
-	Color3.fromRGB(220, 80, 80),
-	Color3.fromRGB(180, 40, 40)
-)
-
-addButtonHover(
-	MinimizeButton,
-	Color3.fromRGB(60, 60, 70),
-	Color3.fromRGB(80, 80, 90),
-	Color3.fromRGB(50, 50, 60)
-)
-
-local minimized = false
-if wasMinimized then minimized = true end
-
-MinimizeButton.MouseButton1Click:Connect(function()
-	minimized = not minimized
-
-	if minimized then
-		ContentContainer.Visible = false
-		MainFrame.Size = UDim2.new(0, 380, 0, 60)
-		MinimizeButton.Text = "+"
-		MainFrame.Draggable = false
-	else
-		ContentContainer.Visible = true
-		updateForScreenSize()
-		MinimizeButton.Text = "−"
-		MainFrame.Draggable = true
-	end
-end)
-
-local UserInputService = game:GetService("UserInputService")
-local dragging = false
-local dragInput, dragStart, startPos
-
-local function update(input)
-	local delta = input.Position - dragStart
-	MainFrame.Position = UDim2.new(
-		startPos.X.Scale,
-		startPos.X.Offset + delta.X,
-		startPos.Y.Scale,
-		startPos.Y.Offset + delta.Y
-	)
-end
-
-Header.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		dragging = true
-		dragStart = input.Position
-		startPos = MainFrame.Position
-
-		input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then
-				dragging = false
-			end
+		button.MouseButton1Up:Connect(function()
+			button.BackgroundColor3 = hoverColor
 		end)
 	end
-end)
 
-UserInputService.InputChanged:Connect(function(input)
-	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-		update(input)
+	addButtonHover(
+		FollowButton,
+		Color3.fromRGB(80, 120, 255),
+		Color3.fromRGB(100, 140, 255),
+		Color3.fromRGB(60, 100, 235)
+	)
+
+	addButtonHover(
+		CancelButton,
+		Color3.fromRGB(200, 60, 60),
+		Color3.fromRGB(220, 80, 80),
+		Color3.fromRGB(180, 40, 40)
+	)
+
+	addButtonHover(
+		MinimizeButton,
+		Color3.fromRGB(60, 60, 70),
+		Color3.fromRGB(80, 80, 90),
+		Color3.fromRGB(50, 50, 60)
+	)
+
+	local minimized = false
+	if wasMinimized then minimized = true end
+
+	MinimizeButton.MouseButton1Click:Connect(function()
+		minimized = not minimized
+
+		if minimized then
+			ContentContainer.Visible = false
+			MainFrame.Size = UDim2.new(0, 380, 0, 60)
+			MinimizeButton.Text = "+"
+			MainFrame.Draggable = false
+		else
+			ContentContainer.Visible = true
+			updateForScreenSize()
+			MinimizeButton.Text = "−"
+			MainFrame.Draggable = true
+		end
+	end)
+
+	local UserInputService = game:GetService("UserInputService")
+	local dragging = false
+	local dragInput, dragStart, startPos
+
+	local function update(input)
+		local delta = input.Position - dragStart
+		MainFrame.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
 	end
-end)
 
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local PathfindingService = game:GetService("PathfindingService")
+	Header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = MainFrame.Position
 
--- Auto-resume connection
-local characterAddedConnection = nil
-local targetPlayer = nil
-local isFollowing = false
-local followConnection = nil
-local lastTargetName = ""
-
-local STOP_DISTANCE = 8
-local PATH_UPDATE_INTERVAL = 0.5
-
-local LOOK_DURATION = 1.5
-local LOOK_AWAY_DELAY = 1.5
-local LOOK_AT_DIRECTION_BRIEFLY = 0.5
-
-local isBeingLookedAt = false
-local lookStartTime = 0
-local lookAwayStartTime = 0
-local isLookingBack = false
-local shouldLookAtDirection = false
-local lookAtDirectionTime = 0
-
-local wasInRadius = false
-local currentBehavior = nil
-local isExecutingBehavior = false
-local lastDistanceUpdate = 0
-
-local currentPath = nil
-local currentWaypointIndex = 0
-local isComputingPath = false
-local lastPathComputeTime = 0
-
-local antiSeatConnection = nil
-local antiSeatActive = false
-
-local function checkVictimSeated(targetHumanoid)
-	return targetHumanoid and targetHumanoid.Sit
-end
-
-local function activateAntiSeat()
-	if antiSeatActive then return end
-
-	local character = player.Character
-	if character then
-		local humanoid = character:FindFirstChild("Humanoid")
-		if humanoid then
-			if antiSeatConnection then
-				antiSeatConnection:Disconnect()
-				antiSeatConnection = nil
-			end
-
-			antiSeatConnection = humanoid.Seated:Connect(function(isSeated, seat)
-				if isSeated then
-					local victimSeated = false
-					if targetPlayer and targetPlayer.Character then
-						local targetHumanoid = targetPlayer.Character:FindFirstChild("Humanoid")
-						if targetHumanoid and checkVictimSeated(targetHumanoid) then
-							victimSeated = true
-							return
-						end
-					end
-
-					task.wait(0.3)
-					humanoid.Sit = false
-					if seat then
-						seat:Sit(nil)
-					end
-					humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
 				end
 			end)
-			antiSeatActive = true
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			update(input)
+		end
+	end)
+
+	local Players = game:GetService("Players")
+	local RunService = game:GetService("RunService")
+	local PathfindingService = game:GetService("PathfindingService")
+
+	-- Auto-resume connection
+	local characterAddedConnection = nil
+	local targetPlayer = nil
+	local isFollowing = false
+	local followConnection = nil
+	local lastTargetName = ""
+
+	local STOP_DISTANCE = 8
+	local PATH_UPDATE_INTERVAL = 0.5
+
+	local LOOK_DURATION = 1.5
+	local LOOK_AWAY_DELAY = 1.5
+	local LOOK_AT_DIRECTION_BRIEFLY = 0.5
+
+	local isBeingLookedAt = false
+	local lookStartTime = 0
+	local lookAwayStartTime = 0
+	local isLookingBack = false
+	local shouldLookAtDirection = false
+	local lookAtDirectionTime = 0
+
+	local wasInRadius = false
+	local currentBehavior = nil
+	local isExecutingBehavior = false
+	local lastDistanceUpdate = 0
+
+	local currentPath = nil
+	local currentWaypointIndex = 0
+	local isComputingPath = false
+	local lastPathComputeTime = 0
+
+	local antiSeatConnection = nil
+	local antiSeatActive = false
+
+	-- === WALL / LADDER DETECTION ===
+	local stuckTimer = 0
+	local stuckStartDistance = nil
+	local STUCK_TIMEOUT = 2   -- seconds to try moving before deciding it's a wall
+	local STUCK_PROGRESS_THRESHOLD = 1  -- must get at least 1 stud closer to be considered progress
+	local isStuckOnWall = false
+
+	local function checkVictimSeated(targetHumanoid)
+		return targetHumanoid and targetHumanoid.Sit
+	end
+
+	local function activateAntiSeat()
+		if antiSeatActive then return end
+
+		local character = player.Character
+		if character then
+			local humanoid = character:FindFirstChild("Humanoid")
+			if humanoid then
+				if antiSeatConnection then
+					antiSeatConnection:Disconnect()
+					antiSeatConnection = nil
+				end
+
+				antiSeatConnection = humanoid.Seated:Connect(function(isSeated, seat)
+					if isSeated then
+						local victimSeated = false
+						if targetPlayer and targetPlayer.Character then
+							local targetHumanoid = targetPlayer.Character:FindFirstChild("Humanoid")
+							if targetHumanoid and checkVictimSeated(targetHumanoid) then
+								victimSeated = true
+								return
+							end
+						end
+
+						task.wait(0.3)
+						humanoid.Sit = false
+						if seat then
+							seat:Sit(nil)
+						end
+						humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+					end
+				end)
+				antiSeatActive = true
+			end
 		end
 	end
-end
 
-local function deactivateAntiSeat()
-	if not antiSeatActive then return end
+	local function deactivateAntiSeat()
+		if not antiSeatActive then return end
 
-	if antiSeatConnection then
-		antiSeatConnection:Disconnect()
-		antiSeatConnection = nil
+		if antiSeatConnection then
+			antiSeatConnection:Disconnect()
+			antiSeatConnection = nil
+		end
+		antiSeatActive = false
 	end
-	antiSeatActive = false
-end
 
-local function findPlayer(searchText)
-	if searchText == "" then
+	local function findPlayer(searchText)
+		if searchText == "" then
+			return nil
+		end
+
+		local searchLower = searchText:lower()
+		local matchingPlayers = {}
+
+		for _, otherPlayer in pairs(Players:GetPlayers()) do
+			if otherPlayer ~= player then
+				local usernameLower = otherPlayer.Name:lower()
+				local displayLower = otherPlayer.DisplayName:lower()
+
+				if usernameLower:sub(1, #searchLower) == searchLower or 
+					displayLower:sub(1, #searchLower) == searchLower or
+					usernameLower:find(searchLower, 1, true) or 
+					displayLower:find(searchLower, 1, true) then
+					table.insert(matchingPlayers, otherPlayer)
+				end
+			end
+		end
+
+		if #matchingPlayers > 0 then
+			return matchingPlayers[1]
+		end
+
 		return nil
 	end
 
-	local searchLower = searchText:lower()
-	local matchingPlayers = {}
+	local function isTargetLookingAtFollower(targetRoot, followerRoot)
+		if not targetRoot or not followerRoot then return false end
 
-	for _, otherPlayer in pairs(Players:GetPlayers()) do
-		if otherPlayer ~= player then
-			local usernameLower = otherPlayer.Name:lower()
-			local displayLower = otherPlayer.DisplayName:lower()
+		local toFollower = (followerRoot.Position - targetRoot.Position).Unit
+		local targetLookDirection = targetRoot.CFrame.LookVector
+		local dotProduct = targetLookDirection:Dot(toFollower)
+		local angle = math.deg(math.acos(math.clamp(dotProduct, -1, 1)))
 
-			if usernameLower:sub(1, #searchLower) == searchLower or 
-				displayLower:sub(1, #searchLower) == searchLower or
-				usernameLower:find(searchLower, 1, true) or 
-				displayLower:find(searchLower, 1, true) then
-				table.insert(matchingPlayers, otherPlayer)
+		return angle < 22
+	end
+
+	local function getStayBesidePosition(targetRoot, side)
+		if side == "left" then
+			return targetRoot.CFrame * CFrame.new(-4, 0, 0)
+		elseif side == "right" then
+			return targetRoot.CFrame * CFrame.new(4, 0, 0)
+		end
+		return targetRoot.CFrame
+	end
+
+	local function stopFollowing()
+		isFollowing = false
+		targetPlayer = nil
+		isBeingLookedAt = false
+		isLookingBack = false
+		shouldLookAtDirection = false
+		wasInRadius = false
+		currentBehavior = nil
+		isExecutingBehavior = false
+		currentPath = nil
+		currentWaypointIndex = 0
+		isComputingPath = false
+		isStuckOnWall = false
+
+		deactivateAntiSeat()
+
+		if characterAddedConnection then
+			characterAddedConnection:Disconnect()
+			characterAddedConnection = nil
+		end
+
+		if followConnection then
+			followConnection:Disconnect()
+			followConnection = nil
+		end
+
+		local character = player.Character
+		if character then
+			local humanoid = character:FindFirstChild("Humanoid")
+			if humanoid then
+				humanoid:Move(Vector3.new(0, 0, 0))
 			end
 		end
 	end
 
-	if #matchingPlayers > 0 then
-		return matchingPlayers[1]
+	local function lookAtPosition(character, targetPosition)
+		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+		if not humanoidRootPart then return end
+
+		local lookDirection = (targetPosition - humanoidRootPart.Position).Unit
+		lookDirection = Vector3.new(lookDirection.X, 0, lookDirection.Z)
+		humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position, humanoidRootPart.Position + lookDirection)
 	end
 
-	return nil
-end
+	local function lookInDirection(character, direction)
+		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+		if not humanoidRootPart then return end
 
-local function isTargetLookingAtFollower(targetRoot, followerRoot)
-	if not targetRoot or not followerRoot then return false end
-
-	local toFollower = (followerRoot.Position - targetRoot.Position).Unit
-	local targetLookDirection = targetRoot.CFrame.LookVector
-	local dotProduct = targetLookDirection:Dot(toFollower)
-	local angle = math.deg(math.acos(math.clamp(dotProduct, -1, 1)))
-
-	return angle < 22
-end
-
-local function getStayBesidePosition(targetRoot, side)
-	if side == "left" then
-		return targetRoot.CFrame * CFrame.new(-4, 0, 0)
-	elseif side == "right" then
-		return targetRoot.CFrame * CFrame.new(4, 0, 0)
-	end
-	return targetRoot.CFrame
-end
-
-local function stopFollowing()
-	isFollowing = false
-	targetPlayer = nil
-	isBeingLookedAt = false
-	isLookingBack = false
-	shouldLookAtDirection = false
-	wasInRadius = false
-	currentBehavior = nil
-	isExecutingBehavior = false
-	currentPath = nil
-	currentWaypointIndex = 0
-	isComputingPath = false
-
-	deactivateAntiSeat()
-
-	-- Clean up auto-resume connection
-	if characterAddedConnection then
-		characterAddedConnection:Disconnect()
-		characterAddedConnection = nil
+		direction = direction.Unit
+		direction = Vector3.new(direction.X, 0, direction.Z)
+		humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position, humanoidRootPart.Position + direction)
 	end
 
-	if followConnection then
-		followConnection:Disconnect()
-		followConnection = nil
+	local function getPointInTargetLookDirection(targetRoot, distance)
+		local lookDirection = targetRoot.CFrame.LookVector
+		return targetRoot.Position + (lookDirection * distance)
 	end
 
-	local character = player.Character
-	if character then
-		local humanoid = character:FindFirstChild("Humanoid")
-		if humanoid then
-			humanoid:Move(Vector3.new(0, 0, 0))
-		end
-	end
-end
+	local function followCurrentPathWaypoints(character, humanoid, humanoidRootPart, targetRoot)
+		if not currentPath or currentWaypointIndex == 0 then return false end
 
-local function lookAtPosition(character, targetPosition)
-	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-	if not humanoidRootPart then return end
-
-	local lookDirection = (targetPosition - humanoidRootPart.Position).Unit
-	lookDirection = Vector3.new(lookDirection.X, 0, lookDirection.Z)
-	humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position, humanoidRootPart.Position + lookDirection)
-end
-
-local function lookInDirection(character, direction)
-	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-	if not humanoidRootPart then return end
-
-	direction = direction.Unit
-	direction = Vector3.new(direction.X, 0, direction.Z)
-	humanoidRootPart.CFrame = CFrame.new(humanoidRootPart.Position, humanoidRootPart.Position + direction)
-end
-
-local function getPointInTargetLookDirection(targetRoot, distance)
-	local lookDirection = targetRoot.CFrame.LookVector
-	return targetRoot.Position + (lookDirection * distance)
-end
-
-local function followCurrentPathWaypoints(character, humanoid, humanoidRootPart, targetRoot)
-	if not currentPath or currentWaypointIndex == 0 then return false end
-
-	local waypoints = currentPath:GetWaypoints()
-	if currentWaypointIndex > #waypoints then
-		currentPath = nil
-		currentWaypointIndex = 0
-		return false
-	end
-
-	local currentWaypoint = waypoints[currentWaypointIndex]
-	local distanceToWaypoint = (humanoidRootPart.Position - currentWaypoint.Position).Magnitude
-
-	if #waypoints > 0 then
-		local pathEndPos = waypoints[#waypoints].Position
-		local targetDistanceFromEnd = (targetRoot.Position - pathEndPos).Magnitude
-
-		if targetDistanceFromEnd > 20 then
-			currentPath = nil
-			currentWaypointIndex = 0
-			isComputingPath = false
-			return false
-		end
-	end
-
-	humanoid:MoveTo(currentWaypoint.Position)
-
-	if currentWaypoint.Action == Enum.PathWaypointAction.Jump then
-		humanoid.Jump = true
-	end
-
-	if distanceToWaypoint < 4 then
-		currentWaypointIndex = currentWaypointIndex + 1
-
+		local waypoints = currentPath:GetWaypoints()
 		if currentWaypointIndex > #waypoints then
 			currentPath = nil
 			currentWaypointIndex = 0
+			return false
 		end
-	end
 
-	return true
-end
+		local currentWaypoint = waypoints[currentWaypointIndex]
+		local distanceToWaypoint = (humanoidRootPart.Position - currentWaypoint.Position).Magnitude
 
--- Function to handle character respawn and resume following
-local function handleCharacterRespawn()
-	if isFollowing and targetPlayer and targetPlayer.Parent then
-		-- Wait for character to fully load
-		task.wait(0.5)
-		
-		-- Check if target still exists
-		local foundPlayer = findPlayer(targetPlayer.Name)
-		if foundPlayer and foundPlayer.Parent then
-			-- Clean up old connections
-			if followConnection then
-				followConnection:Disconnect()
-				followConnection = nil
+		if #waypoints > 0 then
+			local pathEndPos = waypoints[#waypoints].Position
+			local targetDistanceFromEnd = (targetRoot.Position - pathEndPos).Magnitude
+
+			if targetDistanceFromEnd > 20 then
+				currentPath = nil
+				currentWaypointIndex = 0
+				isComputingPath = false
+				return false
 			end
-			
-			-- Reset pathfinding state
-			currentPath = nil
-			currentWaypointIndex = 0
-			isComputingPath = false
-			
-			-- Start following again
-			startFollowing()
-			
-			-- Update status
-			StatusLabel.Text = "Resumed following: " .. foundPlayer.DisplayName
-			StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-		else
-			-- Target left
-			stopFollowing()
-			StatusLabel.Text = "Target player left"
-			StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+		end
+
+		humanoid:MoveTo(currentWaypoint.Position)
+
+		if currentWaypoint.Action == Enum.PathWaypointAction.Jump then
+			humanoid.Jump = true
+		end
+
+		if distanceToWaypoint < 4 then
+			currentWaypointIndex = currentWaypointIndex + 1
+
+			if currentWaypointIndex > #waypoints then
+				currentPath = nil
+				currentWaypointIndex = 0
+			end
+		end
+
+		return true
+	end
+
+	local function handleCharacterRespawn()
+		if isFollowing and targetPlayer and targetPlayer.Parent then
+			task.wait(0.5)
+
+			local foundPlayer = findPlayer(targetPlayer.Name)
+			if foundPlayer and foundPlayer.Parent then
+				if followConnection then
+					followConnection:Disconnect()
+					followConnection = nil
+				end
+
+				currentPath = nil
+				currentWaypointIndex = 0
+				isComputingPath = false
+				isStuckOnWall = false
+
+				startFollowing()
+
+				StatusLabel.Text = "Resumed following: " .. foundPlayer.DisplayName
+				StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+			else
+				stopFollowing()
+				StatusLabel.Text = "Target player left"
+				StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+			end
 		end
 	end
-end
 
-local function startFollowing()
-	if followConnection then
-		followConnection:Disconnect()
+	local function startFollowing()
+		if followConnection then
+			followConnection:Disconnect()
+		end
+
+		activateAntiSeat()
+
+		if characterAddedConnection then
+			characterAddedConnection:Disconnect()
+		end
+		characterAddedConnection = player.CharacterAdded:Connect(handleCharacterRespawn)
+
+		local lastUpdate = 0
+		isBeingLookedAt = false
+		isLookingBack = false
+		shouldLookAtDirection = false
+		lookStartTime = 0
+		lookAwayStartTime = 0
+		lookAtDirectionTime = 0
+
+		wasInRadius = false
+		currentBehavior = nil
+		isExecutingBehavior = false
+		lastDistanceUpdate = 0
+
+		currentPath = nil
+		currentWaypointIndex = 0
+		isComputingPath = false
+		lastPathComputeTime = 0
+
+		-- Reset wall detection
+		stuckTimer = 0
+		stuckStartDistance = nil
+		isStuckOnWall = false
+
+		followConnection = RunService.Heartbeat:Connect(function(deltaTime)
+			if not isFollowing then return end
+
+			if not targetPlayer or not targetPlayer.Parent then
+				stopFollowing()
+				StatusLabel.Text = "Target player left"
+				StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+				return
+			end
+
+			local character = player.Character
+			local targetChar = targetPlayer.Character
+
+			if not character or not targetChar then 
+				return 
+			end
+
+			local humanoid = character:FindFirstChild("Humanoid")
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+			local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+			local targetHumanoid = targetChar:FindFirstChild("Humanoid")
+
+			if not humanoid or not humanoidRootPart or not targetRoot or not targetHumanoid then 
+				return 
+			end
+
+			local distance = (targetRoot.Position - humanoidRootPart.Position).Magnitude
+			local currentTime = tick()
+
+			if distance <= STOP_DISTANCE then
+				if not wasInRadius then
+					wasInRadius = true
+					local randomChoice = math.random(1, 3)
+
+					if randomChoice == 1 then
+						currentBehavior = "left"
+						StatusLabel.Text = "Moving to left side"
+						StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+					elseif randomChoice == 2 then
+						currentBehavior = "right"
+						StatusLabel.Text = "Moving to right side"
+						StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+					else
+						currentBehavior = "follow"
+						StatusLabel.Text = "Following directly"
+						StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+					end
+
+					isExecutingBehavior = true
+				end
+			else
+				wasInRadius = false
+				currentBehavior = nil
+				isExecutingBehavior = false
+			end
+
+			if isExecutingBehavior and currentBehavior then
+				if currentBehavior == "left" or currentBehavior == "right" then
+					local sidePos = getStayBesidePosition(targetRoot, currentBehavior)
+					humanoid:MoveTo(sidePos.Position)
+
+					local distanceToSide = (sidePos.Position - humanoidRootPart.Position).Magnitude
+
+					if distanceToSide < 2 then
+						currentBehavior = "follow"
+						isExecutingBehavior = false
+					else
+						StatusLabel.Text = "Moving to " .. currentBehavior .. " side (" .. math.floor(distance) .. " studs)"
+						StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+						return
+					end
+				end
+			end
+
+			if currentTime - lastDistanceUpdate > 0.5 then
+				if not isBeingLookedAt and not isLookingBack and not shouldLookAtDirection then
+					if currentBehavior == "follow" and wasInRadius then
+						StatusLabel.Text = string.format("Following in radius: %.0f studs", distance)
+					elseif not wasInRadius then
+						StatusLabel.Text = string.format("Following: %.0f studs away", distance)
+					end
+					StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+				end
+				lastDistanceUpdate = currentTime
+			end
+
+			local targetLooking = isTargetLookingAtFollower(targetRoot, humanoidRootPart)
+
+			if distance <= STOP_DISTANCE and targetLooking then
+				if not isBeingLookedAt then
+					isBeingLookedAt = true
+					lookStartTime = currentTime
+					shouldLookAtDirection = false
+					StatusLabel.Text = string.format("Target looking at you: %.0f studs", distance)
+					StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+				else
+					local lookDuration = currentTime - lookStartTime
+
+					if lookDuration >= LOOK_DURATION and not isLookingBack then
+						isLookingBack = true
+						shouldLookAtDirection = false
+						StatusLabel.Text = string.format("Looking back at target: %.0f studs", distance)
+						StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
+					end
+
+					if isLookingBack then
+						lookAtPosition(character, targetRoot.Position)
+					end
+				end
+				lookAwayStartTime = 0
+			else
+				if isBeingLookedAt then
+					isBeingLookedAt = false
+
+					if isLookingBack then
+						lookAwayStartTime = currentTime
+						StatusLabel.Text = string.format("Target looked away (1.5s): %.0f studs", distance)
+						StatusLabel.TextColor3 = Color3.fromRGB(255, 180, 100)
+					else
+						isLookingBack = false
+						shouldLookAtDirection = false
+					end
+				end
+
+				if lookAwayStartTime > 0 then
+					local timeSinceLookAway = currentTime - lookAwayStartTime
+
+					if timeSinceLookAway < LOOK_AWAY_DELAY then
+						local timeLeft = math.ceil(LOOK_AWAY_DELAY - timeSinceLookAway)
+						StatusLabel.Text = string.format("Waiting (1.5s): %.1fs, %.0f studs", LOOK_AWAY_DELAY - timeSinceLookAway, distance)
+						StatusLabel.TextColor3 = Color3.fromRGB(255, 180, 100)
+					else
+						if not shouldLookAtDirection then
+							shouldLookAtDirection = true
+							lookAtDirectionTime = currentTime
+						end
+
+						if shouldLookAtDirection then
+							local timeLookingAtDirection = currentTime - lookAtDirectionTime
+
+							if timeLookingAtDirection < LOOK_AT_DIRECTION_BRIEFLY then
+								local pointToLookAt = getPointInTargetLookDirection(targetRoot, 20)
+								lookAtPosition(character, pointToLookAt)
+
+								StatusLabel.Text = string.format("Looking where target is facing: %.0f studs", distance)
+								StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
+							else
+								isLookingBack = false
+								shouldLookAtDirection = false
+								lookAwayStartTime = 0
+								StatusLabel.Text = string.format("Following: %.0f studs away", distance)
+								StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+							end
+						end
+					end
+				end
+			end
+
+			if not isLookingBack and not shouldLookAtDirection then
+				local ray = Ray.new(humanoidRootPart.Position, (targetRoot.Position - humanoidRootPart.Position).Unit * math.min(distance, 100))
+				local hitPart = workspace:FindPartOnRayWithIgnoreList(ray, {character, targetChar})
+
+				local isPathBlocked = hitPart and hitPart.CanCollide
+
+				if isPathBlocked then
+					StatusLabel.Text = string.format("Path blocked - calculating new route: %.0f studs", distance)
+					StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+				end
+
+				if distance <= STOP_DISTANCE then
+					humanoid:MoveTo(humanoidRootPart.Position)
+					if not isBeingLookedAt and not isLookingBack and not shouldLookAtDirection then
+						StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
+					end
+					return
+				end
+
+				-- === WALL / LADDER DETECTION ===
+				if isPathBlocked and not isStuckOnWall then
+					-- We are blocked, start or continue stuck timer
+					if stuckStartDistance == nil then
+						stuckStartDistance = distance
+						stuckTimer = 0
+					else
+						stuckTimer = stuckTimer + deltaTime
+					end
+
+					-- After timeout, check if we made progress
+					if stuckTimer >= STUCK_TIMEOUT then
+						local progress = stuckStartDistance - distance
+						if progress < STUCK_PROGRESS_THRESHOLD then
+							-- No progress → it's a wall, stop moving
+							isStuckOnWall = true
+							StatusLabel.Text = "Wall detected – stopped"
+							StatusLabel.TextColor3 = Color3.fromRGB(255, 0, 0)
+						else
+							-- Progress made → it's a ladder or climbable, continue
+							stuckStartDistance = nil
+							stuckTimer = 0
+						end
+					end
+				elseif not isPathBlocked then
+					-- Path is clear, reset stuck detection
+					stuckStartDistance = nil
+					stuckTimer = 0
+					isStuckOnWall = false
+				end
+
+				-- If we are stuck on a wall, do not issue any MoveTo commands
+				if isStuckOnWall then
+					return
+				end
+
+				-- === PATHFINDING ===
+				local shouldRecompute = false
+
+				if currentPath then
+					local waypoints = currentPath:GetWaypoints()
+					if #waypoints > 0 then
+						local pathEnd = waypoints[#waypoints].Position
+						local distToEnd = (targetRoot.Position - pathEnd).Magnitude
+						if distToEnd > 10 then
+							shouldRecompute = true
+						end
+					end
+					if isPathBlocked then
+						shouldRecompute = true
+					end
+				else
+					shouldRecompute = true
+				end
+
+				if shouldRecompute and not isComputingPath and currentTime - lastPathComputeTime >= PATH_UPDATE_INTERVAL then
+					isComputingPath = true
+					lastPathComputeTime = currentTime
+
+					coroutine.wrap(function()
+						local path = PathfindingService:CreatePath({
+							AgentRadius = 2,
+							AgentHeight = 5,
+							AgentCanJump = true,
+							AgentJumpHeight = 7.5,
+							AgentMaxSlope = 45,
+							WaypointSpacing = 4
+						})
+
+						local success = pcall(function()
+							path:ComputeAsync(humanoidRootPart.Position, targetRoot.Position)
+						end)
+
+						if success and path.Status == Enum.PathStatus.Success then
+							currentPath = path
+							currentWaypointIndex = 1
+						else
+							currentPath = nil   -- fallback to direct movement
+						end
+						isComputingPath = false
+					end)()
+				end
+
+				-- Move the agent: follow path if we have one; otherwise move directly toward the target
+				if currentPath then
+					followCurrentPathWaypoints(character, humanoid, humanoidRootPart, targetRoot)
+				else
+					-- Direct movement – this handles ladders and simple obstacles
+					humanoid:MoveTo(targetRoot.Position)
+				end
+			end
+		end)
 	end
 
-	activateAntiSeat()
+	local function updateSearchPreview()
+		local searchText = SearchBar.Text
 
-	-- Connect character respawn event
-	if characterAddedConnection then
-		characterAddedConnection:Disconnect()
+		if searchText == "" then
+			if not isFollowing then
+				StatusLabel.Text = "Ready"
+				StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
+			end
+			return
+		end
+
+		local foundPlayer = findPlayer(searchText)
+
+		if foundPlayer then
+			if not isFollowing then
+				StatusLabel.Text = "Found: " .. foundPlayer.DisplayName .. " (@" .. foundPlayer.Name .. ")"
+				StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
+			end
+		else
+			if not isFollowing then
+				StatusLabel.Text = "No player found"
+				StatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
+			end
+		end
 	end
-	characterAddedConnection = player.CharacterAdded:Connect(handleCharacterRespawn)
 
-	local lastUpdate = 0
-	isBeingLookedAt = false
-	isLookingBack = false
-	shouldLookAtDirection = false
-	lookStartTime = 0
-	lookAwayStartTime = 0
-	lookAtDirectionTime = 0
+	SearchBar:GetPropertyChangedSignal("Text"):Connect(updateSearchPreview)
 
-	wasInRadius = false
-	currentBehavior = nil
-	isExecutingBehavior = false
-	lastDistanceUpdate = 0
+	FollowButton.MouseButton1Click:Connect(function()
+		local searchText = SearchBar.Text
 
-	currentPath = nil
-	currentWaypointIndex = 0
-	isComputingPath = false
-	lastPathComputeTime = 0
-
-	followConnection = RunService.Heartbeat:Connect(function(deltaTime)
-		if not isFollowing then return end
-
-		if not targetPlayer or not targetPlayer.Parent then
-			stopFollowing()
-			StatusLabel.Text = "Target player left"
+		if searchText == "" then
+			StatusLabel.Text = "Please enter a player name"
 			StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
 			return
 		end
 
-		local character = player.Character
-		local targetChar = targetPlayer.Character
+		local foundPlayer = findPlayer(searchText)
 
-		if not character or not targetChar then 
-			return 
-		end
-
-		local humanoid = character:FindFirstChild("Humanoid")
-		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
-		local targetHumanoid = targetChar:FindFirstChild("Humanoid")
-
-		if not humanoid or not humanoidRootPart or not targetRoot or not targetHumanoid then 
-			return 
-		end
-
-		local distance = (targetRoot.Position - humanoidRootPart.Position).Magnitude
-		local currentTime = tick()
-
-		if distance <= STOP_DISTANCE then
-			if not wasInRadius then
-				wasInRadius = true
-				local randomChoice = math.random(1, 3)
-
-				if randomChoice == 1 then
-					currentBehavior = "left"
-					StatusLabel.Text = "Moving to left side"
-					StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
-				elseif randomChoice == 2 then
-					currentBehavior = "right"
-					StatusLabel.Text = "Moving to right side"
-					StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
-				else
-					currentBehavior = "follow"
-					StatusLabel.Text = "Following directly"
-					StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-				end
-
-				isExecutingBehavior = true
-			end
-		else
-			wasInRadius = false
-			currentBehavior = nil
-			isExecutingBehavior = false
-		end
-
-		if isExecutingBehavior and currentBehavior then
-			if currentBehavior == "left" or currentBehavior == "right" then
-				local sidePos = getStayBesidePosition(targetRoot, currentBehavior)
-				humanoid:MoveTo(sidePos.Position)
-
-				local distanceToSide = (sidePos.Position - humanoidRootPart.Position).Magnitude
-
-				if distanceToSide < 2 then
-					currentBehavior = "follow"
-					isExecutingBehavior = false
-				else
-					StatusLabel.Text = "Moving to " .. currentBehavior .. " side (" .. math.floor(distance) .. " studs)"
-					StatusLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
-					return
-				end
-			end
-		end
-
-		if currentTime - lastDistanceUpdate > 0.5 then
-			if not isBeingLookedAt and not isLookingBack and not shouldLookAtDirection then
-				if currentBehavior == "follow" and wasInRadius then
-					StatusLabel.Text = string.format("Following in radius: %.0f studs", distance)
-				elseif not wasInRadius then
-					StatusLabel.Text = string.format("Following: %.0f studs away", distance)
-				end
-				StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-			end
-			lastDistanceUpdate = currentTime
-		end
-
-		local targetLooking = isTargetLookingAtFollower(targetRoot, humanoidRootPart)
-
-		if distance <= STOP_DISTANCE and targetLooking then
-			if not isBeingLookedAt then
-				isBeingLookedAt = true
-				lookStartTime = currentTime
-				shouldLookAtDirection = false
-				StatusLabel.Text = string.format("Target looking at you: %.0f studs", distance)
-				StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
-			else
-				local lookDuration = currentTime - lookStartTime
-
-				if lookDuration >= LOOK_DURATION and not isLookingBack then
-					isLookingBack = true
-					shouldLookAtDirection = false
-					StatusLabel.Text = string.format("Looking back at target: %.0f studs", distance)
-					StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
-				end
-
-				if isLookingBack then
-					lookAtPosition(character, targetRoot.Position)
-				end
-			end
-			lookAwayStartTime = 0
-		else
-			if isBeingLookedAt then
-				isBeingLookedAt = false
-
-				if isLookingBack then
-					lookAwayStartTime = currentTime
-					StatusLabel.Text = string.format("Target looked away (1.5s): %.0f studs", distance)
-					StatusLabel.TextColor3 = Color3.fromRGB(255, 180, 100)
-				else
-					isLookingBack = false
-					shouldLookAtDirection = false
-				end
-			end
-
-			if lookAwayStartTime > 0 then
-				local timeSinceLookAway = currentTime - lookAwayStartTime
-
-				if timeSinceLookAway < LOOK_AWAY_DELAY then
-					local timeLeft = math.ceil(LOOK_AWAY_DELAY - timeSinceLookAway)
-					StatusLabel.Text = string.format("Waiting (1.5s): %.1fs, %.0f studs", LOOK_AWAY_DELAY - timeSinceLookAway, distance)
-					StatusLabel.TextColor3 = Color3.fromRGB(255, 180, 100)
-				else
-					if not shouldLookAtDirection then
-						shouldLookAtDirection = true
-						lookAtDirectionTime = currentTime
-					end
-
-					if shouldLookAtDirection then
-						local timeLookingAtDirection = currentTime - lookAtDirectionTime
-
-						if timeLookingAtDirection < LOOK_AT_DIRECTION_BRIEFLY then
-							local pointToLookAt = getPointInTargetLookDirection(targetRoot, 20)
-							lookAtPosition(character, pointToLookAt)
-
-							StatusLabel.Text = string.format("Looking where target is facing: %.0f studs", distance)
-							StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
-						else
-							isLookingBack = false
-							shouldLookAtDirection = false
-							lookAwayStartTime = 0
-							StatusLabel.Text = string.format("Following: %.0f studs away", distance)
-							StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-						end
-					end
-				end
-			end
-		end
-
-		if not isLookingBack and not shouldLookAtDirection then
-			local ray = Ray.new(humanoidRootPart.Position, (targetRoot.Position - humanoidRootPart.Position).Unit * math.min(distance, 100))
-			local hitPart = workspace:FindPartOnRayWithIgnoreList(ray, {character, targetChar})
-
-			local isPathBlocked = hitPart and hitPart.CanCollide
-
-			if isPathBlocked then
-				StatusLabel.Text = string.format("Path blocked - calculating new route: %.0f studs", distance)
-				StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-			end
-
-			if distance <= STOP_DISTANCE then
-				humanoid:MoveTo(humanoidRootPart.Position)
-				if not isBeingLookedAt and not isLookingBack and not shouldLookAtDirection then
-					StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
-				end
-				return
-			end
-
-			-- Pure Roblox Pathfinding
-			if currentPath then
-				local stillFollowingPath = followCurrentPathWaypoints(character, humanoid, humanoidRootPart, targetRoot)
-
-				if not stillFollowingPath and currentTime - lastPathComputeTime >= PATH_UPDATE_INTERVAL and not isComputingPath then
-					lastPathComputeTime = currentTime
-					isComputingPath = true
-
-					local path = PathfindingService:CreatePath({
-						AgentRadius = 2,
-						AgentHeight = 5,
-						AgentCanJump = true,
-						AgentJumpHeight = 7.5,
-						AgentMaxSlope = 45,
-						WaypointSpacing = 4
-					})
-
-					local success, errorMsg = pcall(function()
-						path:ComputeAsync(humanoidRootPart.Position, targetRoot.Position)
-					end)
-
-					if success and path.Status == Enum.PathStatus.Success then
-						currentPath = path
-						currentWaypointIndex = 1
-						isComputingPath = false
-					else
-						humanoid:MoveTo(targetRoot.Position)
-						currentPath = nil
-						currentWaypointIndex = 0
-						isComputingPath = false
-						StatusLabel.Text = string.format("Pathfinding failed, moving directly: %.0f studs", distance)
-						StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
-					end
-				end
-			elseif currentTime - lastPathComputeTime >= PATH_UPDATE_INTERVAL and not isComputingPath then
-				lastPathComputeTime = currentTime
-				isComputingPath = true
-
-				local path = PathfindingService:CreatePath({
-					AgentRadius = 2,
-					AgentHeight = 5,
-					AgentCanJump = true,
-					AgentJumpHeight = 7.5,
-					AgentMaxSlope = 45,
-					WaypointSpacing = 4
-				})
-
-				local success, errorMsg = pcall(function()
-					path:ComputeAsync(humanoidRootPart.Position, targetRoot.Position)
-				end)
-
-				if success and path.Status == Enum.PathStatus.Success then
-					currentPath = path
-					currentWaypointIndex = 1
-					isComputingPath = false
-				else
-					humanoid:MoveTo(targetRoot.Position)
-					currentPath = nil
-					currentWaypointIndex = 0
-					isComputingPath = false
-					StatusLabel.Text = string.format("Pathfinding failed, moving directly: %.0f studs", distance)
-					StatusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
-				end
-			elseif not currentPath and not isComputingPath then
-				humanoid:MoveTo(targetRoot.Position)
-			end
-		end
-	end)
-end
-
-local function updateSearchPreview()
-	local searchText = SearchBar.Text
-
-	if searchText == "" then
-		if not isFollowing then
-			StatusLabel.Text = "Ready"
-			StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
-		end
-		return
-	end
-
-	local foundPlayer = findPlayer(searchText)
-
-	if foundPlayer then
-		if not isFollowing then
-			StatusLabel.Text = "Found: " .. foundPlayer.DisplayName .. " (@" .. foundPlayer.Name .. ")"
-			StatusLabel.TextColor3 = Color3.fromRGB(120, 255, 120)
-		end
-	else
-		if not isFollowing then
-			StatusLabel.Text = "No player found"
-			StatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
-		end
-	end
-end
-
-SearchBar:GetPropertyChangedSignal("Text"):Connect(updateSearchPreview)
-
-FollowButton.MouseButton1Click:Connect(function()
-	local searchText = SearchBar.Text
-
-	if searchText == "" then
-		StatusLabel.Text = "Please enter a player name"
-		StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
-		return
-	end
-
-	local foundPlayer = findPlayer(searchText)
-
-	if foundPlayer then
-		targetPlayer = foundPlayer
-		isFollowing = true
-		lastTargetName = foundPlayer.Name
-		startFollowing()
-		StatusLabel.Text = "Started following: " .. foundPlayer.DisplayName
-		StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
-		SearchBar.Text = foundPlayer.Name
-	else
-		StatusLabel.Text = "Player not found"
-		StatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
-	end
-end)
-
-CancelButton.MouseButton1Click:Connect(function()
-	stopFollowing()
-	StatusLabel.Text = "Stopped following"
-	StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
-	SearchBar.Text = ""
-	lastTargetName = ""
-end)
-
-Players.PlayerRemoving:Connect(function(removedPlayer)
-	if removedPlayer == targetPlayer then
-		stopFollowing()
-		StatusLabel.Text = "Target player left the game"
-		StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
-		lastTargetName = ""
-	end
-end)
-
--- Auto-resume following if script re-executes while following
-local function checkAndResumeFollowing()
-	if lastTargetName ~= "" then
-		local foundPlayer = findPlayer(lastTargetName)
-		if foundPlayer and foundPlayer.Parent then
+		if foundPlayer then
 			targetPlayer = foundPlayer
 			isFollowing = true
 			lastTargetName = foundPlayer.Name
 			startFollowing()
-			StatusLabel.Text = "Resumed following: " .. foundPlayer.DisplayName
+			StatusLabel.Text = "Started following: " .. foundPlayer.DisplayName
 			StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
 			SearchBar.Text = foundPlayer.Name
 		else
-			lastTargetName = ""
-			StatusLabel.Text = "Could not resume - player not found"
+			StatusLabel.Text = "Player not found"
 			StatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
 		end
-	end
-end
+	end)
 
-task.wait(1)
-checkAndResumeFollowing()
+	CancelButton.MouseButton1Click:Connect(function()
+		stopFollowing()
+		StatusLabel.Text = "Stopped following"
+		StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+		SearchBar.Text = ""
+		lastTargetName = ""
+	end)
+
+	Players.PlayerRemoving:Connect(function(removedPlayer)
+		if removedPlayer == targetPlayer then
+			stopFollowing()
+			StatusLabel.Text = "Target player left the game"
+			StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+			lastTargetName = ""
+		end
+	end)
+
+	local function checkAndResumeFollowing()
+		if lastTargetName ~= "" then
+			local foundPlayer = findPlayer(lastTargetName)
+			if foundPlayer and foundPlayer.Parent then
+				targetPlayer = foundPlayer
+				isFollowing = true
+				lastTargetName = foundPlayer.Name
+				startFollowing()
+				StatusLabel.Text = "Resumed following: " .. foundPlayer.DisplayName
+				StatusLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+				SearchBar.Text = foundPlayer.Name
+			else
+				lastTargetName = ""
+				StatusLabel.Text = "Could not resume - player not found"
+				StatusLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
+			end
+		end
+	end
+
+	task.wait(1)
+	checkAndResumeFollowing()
+
+end) -- end of pcall
+
+if not success then
+	warn("FollowPlayerGui script error:", err)
+end
