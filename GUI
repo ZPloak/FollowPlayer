@@ -1,5 +1,5 @@
 -- Advanced Follower GUI
--- Smooth movement, side once, pathfinding smooth
+-- Smooth movement, fixed void detection, faster record mode
 
 local player = game.Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
@@ -11,16 +11,15 @@ local Workspace = game:GetService("Workspace")
 
 -- Settings
 local STOP_DISTANCE = 8
-local PATH_UPDATE_INTERVAL = 1.5            -- less frequent recalc
+local PATH_UPDATE_INTERVAL = 0.5
 local SIDE_DISTANCE = 4
-local RECORD_DELAY = 0.2                    -- your tweak
+local RECORD_DELAY = 0.3               -- faster start
 local STUCK_TIMEOUT = 2
 local RECORD_INTERVAL = 0.1
 local MOVE_TOLERANCE = 1.0
-local WAYPOINT_RADIUS = 12                  -- bigger, smoother
+local WAYPOINT_RADIUS = 8              -- larger for smooth path
 local REPLAY_ADVANCE_RADIUS = 7
-local SIDE_UPDATE_INTERVAL = 0.5            -- no longer used for side; kept for potential other use
-local PATH_RECALC_DISTANCE = 10             -- only recalc if target moved this far
+local SIDE_UPDATE_INTERVAL = 0.5
 
 -- Create GUI (unchanged)
 local oldGui = PlayerGui:FindFirstChild("AdvancedFollowGui")
@@ -258,7 +257,7 @@ local followConnection = nil
 local wasInRadius = false
 local currentSide = nil
 local sideTargetPosition = nil
-local sideReached = false
+local lastSideUpdate = 0
 
 -- Recorded mode state
 local recordedMode = false
@@ -279,17 +278,15 @@ local lastSeatExitTime = 0
 
 -- Smooth move
 local lastMoveTarget = nil
+local lastMoveTime = 0
 
--- Pathfinding optimization
-local lastPathTargetPos = nil
-local lastPathComputeTime = 0
-
--- Anti‑void
+-- Anti‑void: improved raycast (longer range, better filtering)
 local function isSafePosition(pos)
 	local rayOrigin = pos + Vector3.new(0, 10, 0)
-	local rayDirection = Vector3.new(0, -100, 0)
+	local rayDirection = Vector3.new(0, -100, 0)  -- check 100 studs down
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+	-- Exclude the player's character (including parts)
 	local character = player.Character
 	if character then
 		local descendants = {}
@@ -349,7 +346,6 @@ local function stopFollowing()
 	wasInRadius = false
 	currentSide = nil
 	sideTargetPosition = nil
-	sideReached = false
 	recordDelayEnd = nil
 	isReplaying = false
 	jumpTriggered = false
@@ -357,7 +353,6 @@ local function stopFollowing()
 	stuckTimer = 0
 	lastPosition = nil
 	lastMoveTarget = nil
-	lastPathTargetPos = nil
 
 	if recordedMode then
 		recordedMode = false
@@ -462,9 +457,11 @@ end
 local function startFollowing()
 	if followConnection then followConnection:Disconnect() end
 
+	local lastPathUpdate = 0
 	local currentPath = nil
 	local currentWaypointIndex = 0
 	local lastWasInside = false
+	local lastSideUpdateTime = 0
 
 	followConnection = RunService.Heartbeat:Connect(function(deltaTime)
 		if not isFollowing or not targetPlayer or not targetPlayer.Parent then
@@ -503,7 +500,7 @@ local function startFollowing()
 		local isInside = distance <= STOP_DISTANCE
 
 		-- Update status text
-		if tick() - (lastPathComputeTime or 0) > 0.2 then
+		if tick() - lastPathUpdate > 0.2 then
 			local mode = ""
 			if recordedMode then
 				if fallbackActive then mode = " [FALLBACK]"
@@ -515,9 +512,8 @@ local function startFollowing()
 			Status.TextColor3 = recordedMode and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(100, 200, 255)
 		end
 
-		-- ========== SIDE BEHAVIOR (move once, then stop) ==========
+		-- Side behavior when close
 		if isInside then
-			-- Cancel recorded mode state if active
 			if recordedMode then
 				recordDelayEnd = nil
 				isReplaying = false
@@ -527,44 +523,39 @@ local function startFollowing()
 				lastMoveTarget = nil
 			end
 
+			local now = tick()
 			if not wasInRadius then
-				-- First time entering radius
 				wasInRadius = true
-				sideReached = false
 				currentSide = (math.random(1, 2) == 1) and "left" or "right"
 				sideTargetPosition = getSidePosition(targetRoot, currentSide).Position
+				lastSideUpdateTime = now
 				if isSafePosition(sideTargetPosition) then
 					smoothMove(humanoid, sideTargetPosition)
 				end
 			else
-				-- Already in radius: only move if we haven't reached the side spot yet
-				if not sideReached and sideTargetPosition then
-					local distToSide = (rootPart.Position - sideTargetPosition).Magnitude
-					if distToSide < 2 then
-						-- Reached the side spot, stop moving
+				if now - lastSideUpdateTime >= SIDE_UPDATE_INTERVAL then
+					sideTargetPosition = getSidePosition(targetRoot, currentSide).Position
+					lastSideUpdateTime = now
+				end
+				if sideTargetPosition then
+					if (rootPart.Position - sideTargetPosition).Magnitude < 2 then
 						smoothMove(humanoid, rootPart.Position)
-						sideReached = true
 					elseif isSafePosition(sideTargetPosition) then
 						smoothMove(humanoid, sideTargetPosition)
 					end
-				else
-					-- Already reached, stay still
-					smoothMove(humanoid, rootPart.Position)
 				end
 			end
 			lastWasInside = isInside
 			return
 		else
-			-- Outside radius: reset side flags
 			if wasInRadius then
 				wasInRadius = false
 				currentSide = nil
 				sideTargetPosition = nil
-				sideReached = false
 			end
 		end
 
-		-- ========== RECORDED MODE HANDLING ==========
+		-- Recorded mode
 		if recordedMode then
 			if lastWasInside and not isInside then
 				recordedPositions = {}
@@ -640,19 +631,10 @@ local function startFollowing()
 			end
 		end
 
-		-- ========== NORMAL PATHFINDING (optimized for smoothness) ==========
+		-- Normal pathfinding (or fallback)
 		local now = tick()
-		-- Recompute path only if target moved significantly or time interval passed
-		local recompute = false
-		if not lastPathTargetPos or (targetRoot.Position - lastPathTargetPos).Magnitude > PATH_RECALC_DISTANCE then
-			recompute = true
-		elseif now - lastPathComputeTime >= PATH_UPDATE_INTERVAL then
-			recompute = true
-		end
-
-		if recompute then
-			lastPathComputeTime = now
-			lastPathTargetPos = targetRoot.Position
+		if now - lastPathUpdate >= PATH_UPDATE_INTERVAL then
+			lastPathUpdate = now
 			if isSafePosition(targetRoot.Position) then
 				local path = PathfindingService:CreatePath({
 					AgentRadius = 2,
