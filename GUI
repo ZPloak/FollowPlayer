@@ -1,5 +1,5 @@
 -- Advanced Follower GUI
--- Smooth movement, less jitter, better recorded mode
+-- Smooth movement, fixed void detection, faster record mode
 
 local player = game.Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
@@ -13,15 +13,15 @@ local Workspace = game:GetService("Workspace")
 local STOP_DISTANCE = 8
 local PATH_UPDATE_INTERVAL = 0.5
 local SIDE_DISTANCE = 4
-local RECORD_DELAY = 0.5
+local RECORD_DELAY = 0.3               -- faster start
 local STUCK_TIMEOUT = 2
-local RECORD_INTERVAL = 0.1          -- smoother, less dense
-local MOVE_TOLERANCE = 1.0           -- fewer redundant MoveTo calls
-local WAYPOINT_RADIUS = 6
-local REPLAY_ADVANCE_RADIUS = 7      -- bigger advance zone, no velocity check
+local RECORD_INTERVAL = 0.1
+local MOVE_TOLERANCE = 1.0
+local WAYPOINT_RADIUS = 8              -- larger for smooth path
+local REPLAY_ADVANCE_RADIUS = 7
 local SIDE_UPDATE_INTERVAL = 0.5
 
--- Create GUI
+-- Create GUI (unchanged)
 local oldGui = PlayerGui:FindFirstChild("AdvancedFollowGui")
 if oldGui then oldGui:Destroy() end
 
@@ -206,7 +206,7 @@ Status.TextColor3 = Color3.fromRGB(200, 200, 200)
 Status.TextSize = 12
 Status.TextXAlignment = Enum.TextXAlignment.Center
 
--- Dragging
+-- Dragging (unchanged)
 local dragging = false
 local dragStart, startPos
 
@@ -239,7 +239,7 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
--- Minimize
+-- Minimize (unchanged)
 local minimized = false
 MinimizeButton.MouseButton1Click:Connect(function()
 	minimized = not minimized
@@ -280,13 +280,27 @@ local lastSeatExitTime = 0
 local lastMoveTarget = nil
 local lastMoveTime = 0
 
--- Anti‑void
+-- Anti‑void: improved raycast (longer range, better filtering)
 local function isSafePosition(pos)
 	local rayOrigin = pos + Vector3.new(0, 10, 0)
-	local rayDirection = Vector3.new(0, -50, 0)
+	local rayDirection = Vector3.new(0, -100, 0)  -- check 100 studs down
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-	rayParams.FilterDescendantsInstances = {player.Character}
+	-- Exclude the player's character (including parts)
+	local character = player.Character
+	if character then
+		local descendants = {}
+		local function addDescendants(obj)
+			table.insert(descendants, obj)
+			for _, child in ipairs(obj:GetChildren()) do
+				addDescendants(child)
+			end
+		end
+		addDescendants(character)
+		rayParams.FilterDescendantsInstances = descendants
+	else
+		rayParams.FilterDescendantsInstances = {}
+	end
 	local result = Workspace:Raycast(rayOrigin, rayDirection, rayParams)
 	return result ~= nil
 end
@@ -586,15 +600,13 @@ local function startFollowing()
 					end
 
 					local distToTarget = (rootPart.Position - targetPos).Magnitude
-					-- Advance when close (no velocity check)
 					if distToTarget < REPLAY_ADVANCE_RADIUS then
 						replayIndex = replayIndex + 1
 						jumpTriggered = false
 						stuckTimer = 0
-						lastMoveTarget = nil   -- force new MoveTo next frame
+						lastMoveTarget = nil
 					end
 
-					-- Stuck detection
 					if autoSwitchEnabled then
 						if lastPosition then
 							local moved = (rootPart.Position - lastPosition).Magnitude
