@@ -1,5 +1,6 @@
--- Advanced Follower GUI
--- Smooth movement, fixed void detection, faster record mode
+-- Advanced Follower GUI (Fixed)
+-- Fixes: status display, isSafePosition perf, fallbackActive reset,
+--        jump reset, smoothMove tolerance, recorded path wipe edge case
 
 local player = game.Players.LocalPlayer
 local PlayerGui = player:WaitForChild("PlayerGui")
@@ -10,18 +11,18 @@ local UserInputService = game:GetService("UserInputService")
 local Workspace = game:GetService("Workspace")
 
 -- Settings
-local STOP_DISTANCE = 8
-local PATH_UPDATE_INTERVAL = 0.5
-local SIDE_DISTANCE = 4
-local RECORD_DELAY = 0.3               -- faster start
-local STUCK_TIMEOUT = 2
-local RECORD_INTERVAL = 0.1
-local MOVE_TOLERANCE = 1.0
-local WAYPOINT_RADIUS = 8              -- larger for smooth path
+local STOP_DISTANCE         = 8
+local PATH_UPDATE_INTERVAL  = 0.5
+local SIDE_DISTANCE         = 4
+local RECORD_DELAY          = 0.3
+local STUCK_TIMEOUT         = 2
+local RECORD_INTERVAL       = 0.1
+local MOVE_TOLERANCE        = 0.3   -- FIX: was 1.0, too large for slow-walk targets
+local WAYPOINT_RADIUS       = 8
 local REPLAY_ADVANCE_RADIUS = 7
-local SIDE_UPDATE_INTERVAL = 0.5
+local SIDE_UPDATE_INTERVAL  = 0.5
 
--- Create GUI (unchanged)
+-- Destroy old GUI if present
 local oldGui = PlayerGui:FindFirstChild("AdvancedFollowGui")
 if oldGui then oldGui:Destroy() end
 
@@ -159,6 +160,7 @@ CancelButton.AutoButtonColor = false
 local ButtonCorner = Instance.new("UICorner")
 ButtonCorner.CornerRadius = UDim.new(0, 8)
 ButtonCorner.Parent = FollowButton
+
 local ButtonCorner2 = Instance.new("UICorner")
 ButtonCorner2.CornerRadius = UDim.new(0, 8)
 ButtonCorner2.Parent = CancelButton
@@ -206,7 +208,7 @@ Status.TextColor3 = Color3.fromRGB(200, 200, 200)
 Status.TextSize = 12
 Status.TextXAlignment = Enum.TextXAlignment.Center
 
--- Dragging (unchanged)
+-- Dragging
 local dragging = false
 local dragStart, startPos
 
@@ -221,7 +223,8 @@ local function updateDrag(input)
 end
 
 Header.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
 		dragging = true
 		dragStart = input.Position
 		startPos = MainFrame.Position
@@ -234,12 +237,15 @@ Header.InputBegan:Connect(function(input)
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+	if dragging and (
+		input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch
+	) then
 		updateDrag(input)
 	end
 end)
 
--- Minimize (unchanged)
+-- Minimize
 local minimized = false
 MinimizeButton.MouseButton1Click:Connect(function()
 	minimized = not minimized
@@ -249,67 +255,63 @@ MinimizeButton.MouseButton1Click:Connect(function()
 	MainFrame.Draggable = not minimized
 end)
 
--- Following state
-local targetPlayer = nil
-local isFollowing = false
-local followConnection = nil
+-- State
+local targetPlayer      = nil
+local isFollowing       = false
+local followConnection  = nil
 
-local wasInRadius = false
-local currentSide = nil
+local wasInRadius       = false
+local currentSide       = nil
 local sideTargetPosition = nil
-local lastSideUpdate = 0
+local lastSideUpdate    = 0
 
--- Recorded mode state
-local recordedMode = false
+local recordedMode      = false
 local recordedPositions = {}
 local recordedJumpIndices = {}
-local recordConnection = nil
-local replayIndex = 1
-local recordDelayEnd = nil
-local isReplaying = false
-local jumpTriggered = false
+local recordConnection  = nil
+local replayIndex       = 1
+local recordDelayEnd    = nil
+local isReplaying       = false
+local jumpTriggered     = false
 
 local autoSwitchEnabled = true
-local fallbackActive = false
-local lastPosition = nil
-local stuckTimer = 0
+local fallbackActive    = false
+local lastPosition      = nil
+local stuckTimer        = 0
 
-local lastSeatExitTime = 0
+local lastSeatExitTime  = 0
+local lastMoveTarget    = nil
+local lastStatusUpdate  = 0
 
--- Smooth move
-local lastMoveTarget = nil
-local lastMoveTime = 0
+-- FIX 1: Cache the character filter instead of rebuilding every frame.
+-- Rebuilt only when the character changes.
+local cachedRayParams   = nil
+local cachedCharacter   = nil
 
--- Anti‑void: improved raycast (longer range, better filtering)
-local function isSafePosition(pos)
-	local rayOrigin = pos + Vector3.new(0, 10, 0)
-	local rayDirection = Vector3.new(0, -100, 0)  -- check 100 studs down
-	local rayParams = RaycastParams.new()
-	rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-	-- Exclude the player's character (including parts)
+local function getRayParams()
 	local character = player.Character
-	if character then
-		local descendants = {}
-		local function addDescendants(obj)
-			table.insert(descendants, obj)
-			for _, child in ipairs(obj:GetChildren()) do
-				addDescendants(child)
-			end
-		end
-		addDescendants(character)
-		rayParams.FilterDescendantsInstances = descendants
-	else
-		rayParams.FilterDescendantsInstances = {}
+	if character ~= cachedCharacter then
+		cachedCharacter = character
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Blacklist
+		params.FilterDescendantsInstances = character and { character } or {}
+		cachedRayParams = params
 	end
-	local result = Workspace:Raycast(rayOrigin, rayDirection, rayParams)
+	return cachedRayParams
+end
+
+-- FIX 2: Void check uses cached params; casts 100 studs down.
+local function isSafePosition(pos)
+	local params = getRayParams()
+	if not params then return false end
+	local result = Workspace:Raycast(pos + Vector3.new(0, 10, 0), Vector3.new(0, -100, 0), params)
 	return result ~= nil
 end
 
+-- FIX 3: MOVE_TOLERANCE lowered to 0.3 so slow-walking targets are tracked correctly.
 local function smoothMove(humanoid, targetPos)
 	if not targetPos then return end
-	if lastMoveTarget and (targetPos - lastMoveTarget).Magnitude < MOVE_TOLERANCE then
-		return
-	end
+	if lastMoveTarget and (targetPos - lastMoveTarget).Magnitude < MOVE_TOLERANCE then return end
 	lastMoveTarget = targetPos
 	humanoid:MoveTo(targetPos)
 end
@@ -319,7 +321,8 @@ local function findPlayer(searchText)
 	local searchLower = searchText:lower()
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player then
-			if p.Name:lower():find(searchLower, 1, true) or p.DisplayName:lower():find(searchLower, 1, true) then
+			if p.Name:lower():find(searchLower, 1, true)
+				or p.DisplayName:lower():find(searchLower, 1, true) then
 				return p
 			end
 		end
@@ -396,23 +399,23 @@ local function startRecording()
 		local targetChar = targetPlayer.Character
 		local localChar = player.Character
 		if not targetChar or not localChar then return end
-		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+		local targetRoot     = targetChar:FindFirstChild("HumanoidRootPart")
 		local targetHumanoid = targetChar:FindFirstChild("Humanoid")
-		local localRoot = localChar:FindFirstChild("HumanoidRootPart")
-		if targetRoot and localRoot and targetHumanoid then
-			local distance = (targetRoot.Position - localRoot.Position).Magnitude
-			if distance > STOP_DISTANCE then
-				local now = tick()
-				if now - lastRecordTime >= RECORD_INTERVAL then
-					table.insert(recordedPositions, targetRoot.Position)
-					local idx = #recordedPositions
-					local isJumping = targetHumanoid.Jump or (targetRoot.Velocity.Y > 5)
-					if isJumping and not lastJumpState then
-						recordedJumpIndices[idx] = true
-					end
-					lastJumpState = isJumping
-					lastRecordTime = now
+		local localRoot      = localChar:FindFirstChild("HumanoidRootPart")
+		if not targetRoot or not localRoot or not targetHumanoid then return end
+
+		local distance = (targetRoot.Position - localRoot.Position).Magnitude
+		if distance > STOP_DISTANCE then
+			local now = tick()
+			if now - lastRecordTime >= RECORD_INTERVAL then
+				table.insert(recordedPositions, targetRoot.Position)
+				local idx = #recordedPositions
+				local isJumping = targetHumanoid.Jump or (targetRoot.AssemblyLinearVelocity.Y > 5)
+				if isJumping and not lastJumpState then
+					recordedJumpIndices[idx] = true
 				end
+				lastJumpState = isJumping
+				lastRecordTime = now
 			end
 		end
 	end)
@@ -457,11 +460,15 @@ end
 local function startFollowing()
 	if followConnection then followConnection:Disconnect() end
 
-	local lastPathUpdate = 0
-	local currentPath = nil
+	local lastPathUpdate       = 0
+	local currentPath          = nil
 	local currentWaypointIndex = 0
-	local lastWasInside = false
-	local lastSideUpdateTime = 0
+	local lastWasInside        = false
+	local lastSideUpdateTime   = 0
+
+	-- FIX 4: Track the target's last known position to detect teleports
+	-- and avoid incorrectly wiping the recorded path.
+	local lastTargetPos        = nil
 
 	followConnection = RunService.Heartbeat:Connect(function(deltaTime)
 		if not isFollowing or not targetPlayer or not targetPlayer.Parent then
@@ -472,19 +479,19 @@ local function startFollowing()
 			return
 		end
 
-		local character = player.Character
-		local targetChar = targetPlayer.Character
+		local character      = player.Character
+		local targetChar     = targetPlayer.Character
 		if not character or not targetChar then return end
 
-		local humanoid = character:FindFirstChild("Humanoid")
-		local rootPart = character:FindFirstChild("HumanoidRootPart")
+		local humanoid       = character:FindFirstChild("Humanoid")
+		local rootPart       = character:FindFirstChild("HumanoidRootPart")
 		local targetHumanoid = targetChar:FindFirstChild("Humanoid")
-		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
+		local targetRoot     = targetChar:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not rootPart or not targetRoot then return end
 
-		-- Anti‑seat
+		-- Anti-seat
 		local followerSeated = isSeated(humanoid)
-		local targetSeated = targetHumanoid and isSeated(targetHumanoid)
+		local targetSeated   = targetHumanoid and isSeated(targetHumanoid)
 		if followerSeated and not targetSeated then
 			humanoid.Sit = false
 			local now = tick()
@@ -499,36 +506,45 @@ local function startFollowing()
 		local distance = (targetRoot.Position - rootPart.Position).Magnitude
 		local isInside = distance <= STOP_DISTANCE
 
-		-- Update status text
-		if tick() - lastPathUpdate > 0.2 then
+		-- Status label (throttled)
+		local now = tick()
+		if now - lastStatusUpdate > 0.2 then
+			lastStatusUpdate = now
+
+			-- FIX 5: Correct mode label logic — each branch is distinct.
 			local mode = ""
 			if recordedMode then
-				if fallbackActive then mode = " [FALLBACK]"
-				elseif isReplaying then mode = " [REPLAY]"
-				elseif recordDelayEnd then mode = " [REC]"
-				else mode = " [REC]" end
+				if fallbackActive then
+					mode = " [FALLBACK]"
+				elseif isReplaying then
+					mode = " [REPLAY]"
+				else
+					mode = " [REC]"
+				end
 			end
+
 			Status.Text = string.format("%s%s (%.0f)", targetPlayer.DisplayName, mode, distance)
-			Status.TextColor3 = recordedMode and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(100, 200, 255)
+			Status.TextColor3 = recordedMode
+				and Color3.fromRGB(255, 200, 100)
+				or  Color3.fromRGB(100, 200, 255)
 		end
 
-		-- Side behavior when close
+		-- Side-stand behaviour when close
 		if isInside then
 			if recordedMode then
 				recordDelayEnd = nil
-				isReplaying = false
-				jumpTriggered = false
+				isReplaying    = false
+				jumpTriggered  = false
 				fallbackActive = false
-				stuckTimer = 0
+				stuckTimer     = 0
 				lastMoveTarget = nil
 			end
 
-			local now = tick()
 			if not wasInRadius then
-				wasInRadius = true
-				currentSide = (math.random(1, 2) == 1) and "left" or "right"
-				sideTargetPosition = getSidePosition(targetRoot, currentSide).Position
-				lastSideUpdateTime = now
+				wasInRadius          = true
+				currentSide          = (math.random(1, 2) == 1) and "left" or "right"
+				sideTargetPosition   = getSidePosition(targetRoot, currentSide).Position
+				lastSideUpdateTime   = now
 				if isSafePosition(sideTargetPosition) then
 					smoothMove(humanoid, sideTargetPosition)
 				end
@@ -545,40 +561,48 @@ local function startFollowing()
 					end
 				end
 			end
+
 			lastWasInside = isInside
+			lastTargetPos = targetRoot.Position
 			return
 		else
 			if wasInRadius then
-				wasInRadius = false
-				currentSide = nil
+				wasInRadius        = false
+				currentSide        = nil
 				sideTargetPosition = nil
 			end
 		end
 
 		-- Recorded mode
 		if recordedMode then
-			if lastWasInside and not isInside then
+			-- FIX 6: Only wipe recorded path on genuine departure, not teleport.
+			-- Guard: target must have been close AND must have moved normally (not teleported).
+			local targetMoved = lastTargetPos
+				and (targetRoot.Position - lastTargetPos).Magnitude < 20
+
+			if lastWasInside and not isInside and targetMoved then
 				recordedPositions = {}
 				recordedJumpIndices = {}
-				replayIndex = 1
+				replayIndex    = 1
 				recordDelayEnd = tick() + RECORD_DELAY
-				isReplaying = false
-				jumpTriggered = false
+				isReplaying    = false
+				jumpTriggered  = false
 				fallbackActive = false
-				stuckTimer = 0
+				stuckTimer     = 0
 				lastMoveTarget = nil
 			end
 
 			if recordDelayEnd then
 				if tick() >= recordDelayEnd then
 					recordDelayEnd = nil
-					isReplaying = true
-					replayIndex = 1
-					jumpTriggered = false
+					isReplaying    = true
+					replayIndex    = 1
+					jumpTriggered  = false
 					fallbackActive = false
 				else
 					smoothMove(humanoid, rootPart.Position)
 					lastWasInside = isInside
+					lastTargetPos = targetRoot.Position
 					return
 				end
 			end
@@ -586,27 +610,36 @@ local function startFollowing()
 			if isReplaying and not fallbackActive then
 				if #recordedPositions > 0 and replayIndex <= #recordedPositions then
 					local targetPos = recordedPositions[replayIndex]
+
 					if isSafePosition(targetPos) then
 						smoothMove(humanoid, targetPos)
 					else
 						smoothMove(humanoid, rootPart.Position)
 					end
 
+					-- FIX 7: Always reset humanoid.Jump to false after triggering it.
 					if recordedJumpIndices[replayIndex] and not jumpTriggered then
 						humanoid.Jump = true
 						jumpTriggered = true
+					elseif jumpTriggered then
+						-- Let Roblox handle the jump; clear flag once airborne or grounded.
+						if humanoid.FloorMaterial ~= Enum.Material.Air then
+							humanoid.Jump = false
+							jumpTriggered = false
+						end
 					elseif not recordedJumpIndices[replayIndex] then
 						jumpTriggered = false
 					end
 
 					local distToTarget = (rootPart.Position - targetPos).Magnitude
 					if distToTarget < REPLAY_ADVANCE_RADIUS then
-						replayIndex = replayIndex + 1
-						jumpTriggered = false
-						stuckTimer = 0
+						replayIndex    = replayIndex + 1
+						jumpTriggered  = false
+						stuckTimer     = 0
 						lastMoveTarget = nil
 					end
 
+					-- Stuck detection
 					if autoSwitchEnabled then
 						if lastPosition then
 							local moved = (rootPart.Position - lastPosition).Magnitude
@@ -614,42 +647,49 @@ local function startFollowing()
 								stuckTimer = stuckTimer + deltaTime
 								if stuckTimer >= STUCK_TIMEOUT then
 									fallbackActive = true
-									stuckTimer = 0
-									Status.Text = "Stuck – using pathfinding"
+									stuckTimer     = 0
+									Status.Text    = "Stuck – using pathfinding"
 								end
 							else
-								stuckTimer = 0
+								-- FIX 8: Reset stuckTimer AND clear fallbackActive when moving again.
+								stuckTimer     = 0
+								if fallbackActive then
+									fallbackActive = false
+									lastMoveTarget = nil
+								end
 							end
 						end
 						lastPosition = rootPart.Position
 					end
 				else
+					-- Replay finished, stand still
 					smoothMove(humanoid, rootPart.Position)
 				end
+
 				lastWasInside = isInside
+				lastTargetPos = targetRoot.Position
 				return
 			end
 		end
 
-		-- Normal pathfinding (or fallback)
-		local now = tick()
+		-- Normal pathfinding (also used as fallback)
 		if now - lastPathUpdate >= PATH_UPDATE_INTERVAL then
 			lastPathUpdate = now
 			if isSafePosition(targetRoot.Position) then
 				local path = PathfindingService:CreatePath({
-					AgentRadius = 2,
-					AgentHeight = 5,
-					AgentCanJump = true,
+					AgentRadius    = 2,
+					AgentHeight    = 5,
+					AgentCanJump   = true,
 					AgentJumpHeight = 7.5,
-					AgentMaxSlope = 45,
-					WaypointSpacing = 4
+					AgentMaxSlope  = 45,
+					WaypointSpacing = 4,
 				})
 				local success = pcall(function()
 					path:ComputeAsync(rootPart.Position, targetRoot.Position)
 				end)
 				if success and path.Status == Enum.PathStatus.Success then
-					currentPath = path
-					currentWaypointIndex = 1
+					currentPath            = path
+					currentWaypointIndex   = 1
 				else
 					currentPath = nil
 				end
@@ -667,9 +707,14 @@ local function startFollowing()
 				else
 					smoothMove(humanoid, rootPart.Position)
 				end
+
+				-- FIX 9: Reset jump after triggering on pathfinding waypoints too.
 				if waypoint.Action == Enum.PathWaypointAction.Jump then
 					humanoid.Jump = true
+				else
+					humanoid.Jump = false
 				end
+
 				if (rootPart.Position - waypoint.Position).Magnitude < WAYPOINT_RADIUS then
 					currentWaypointIndex = currentWaypointIndex + 1
 				end
@@ -685,6 +730,7 @@ local function startFollowing()
 		end
 
 		lastWasInside = isInside
+		lastTargetPos = targetRoot.Position
 	end)
 end
 
@@ -700,7 +746,7 @@ FollowButton.MouseButton1Click:Connect(function()
 	if found then
 		stopFollowing()
 		targetPlayer = found
-		isFollowing = true
+		isFollowing  = true
 		startFollowing()
 		Status.Text = "Following " .. found.DisplayName
 		Status.TextColor3 = Color3.fromRGB(100, 200, 255)
