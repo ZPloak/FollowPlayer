@@ -1,4 +1,4 @@
-"-- Advanced Follower GUI (Fixed)
+-- Advanced Follower GUI (Fixed)
 -- Anti‑void, improved fallback, nearest waypoint resume
 
 local player = game.Players.LocalPlayer
