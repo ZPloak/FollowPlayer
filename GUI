@@ -1,6 +1,5 @@
--- Advanced Follower GUI (Executor‑Optimized)
--- Uses built‑in Draggable, no custom input handling.
--- Falls back to direct MoveTo when PathfindingService fails.
+-- Advanced Follower GUI (Executor‑Optimized + Jump Fix)
+-- Fixed: After jumping, follower no longer gets stuck and doesn't switch to fallback unnecessarily.
 
 local player = game.Players.LocalPlayer
 
@@ -560,7 +559,7 @@ local function startFollowing()
             end
         end
 
-        -- Recorded mode replay
+        -- Recorded mode replay (with jump fix)
         if recordedMode then
             local targetMoved = lastTargetPos and (targetRoot.Position - lastTargetPos).Magnitude < 20
             if not fallbackActive and lastWasInside and not isInside and targetMoved then
@@ -604,24 +603,39 @@ local function startFollowing()
                         smoothMove(humanoid, rootPart.Position)
                     end
 
+                    -- Jump handling with grace period
+                    local justJumped = false
                     if recordedJumpIndices[replayIndex] and not jumpTriggered then
                         humanoid.Jump = true
                         jumpTriggered = true
+                        justJumped = true
+                        -- Negative stuckTimer = grace period (disable stuck detection)
+                        stuckTimer = -1.0
                     elseif jumpTriggered then
                         if humanoid.FloorMaterial ~= Enum.Material.Air then
+                            -- Still in air, do nothing
+                        else
+                            -- Landed
                             humanoid.Jump = false
                             jumpTriggered = false
+                            stuckTimer = 0
                         end
                     elseif not recordedJumpIndices[replayIndex] then
                         jumpTriggered = false
                     end
 
+                    -- Waypoint advance logic
                     local advance = false
                     local distToTarget = (rootPart.Position - targetPos).Magnitude
+                    
                     if recordedJumpIndices[replayIndex] then
+                        -- For jump waypoints: use larger radius and check landing
                         local horizontalDist = (Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z) -
                                                 Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
-                        if horizontalDist < REPLAY_ADVANCE_RADIUS then
+                        if horizontalDist < REPLAY_ADVANCE_RADIUS + 3 then
+                            advance = true
+                        elseif not jumpTriggered and not justJumped then
+                            -- Landed after jump
                             advance = true
                         end
                     else
@@ -631,34 +645,40 @@ local function startFollowing()
                     end
 
                     if advance then
-                        replayIndex    = replayIndex + 1
-                        jumpTriggered  = false
-                        stuckTimer     = 0
+                        replayIndex = replayIndex + 1
+                        jumpTriggered = false
+                        stuckTimer = 0
                         lastMoveTarget = nil
                     end
 
+                    -- Stuck detection with grace period
                     if autoSwitchEnabled then
                         if lastPosition then
                             local moved = (rootPart.Position - lastPosition).Magnitude
                             if moved < 0.5 then
-                                stuckTimer = stuckTimer + deltaTime
-                                if stuckTimer >= STUCK_TIMEOUT then
-                                    fallbackActive         = true
-                                    stuckTimer             = 0
-                                    fallbackPath           = nil
-                                    fallbackTarget         = nil
-                                    fallbackLastPathUpdate = 0
-                                    fallbackLastPathTarget = nil
-                                    lastMoveTarget         = nil
-                                    Status.Text            = "Stuck – using pathfinding"
+                                if stuckTimer >= 0 and not jumpTriggered then
+                                    stuckTimer = stuckTimer + deltaTime
+                                    if stuckTimer >= STUCK_TIMEOUT then
+                                        fallbackActive = true
+                                        stuckTimer = 0
+                                        fallbackPath = nil
+                                        fallbackTarget = nil
+                                        fallbackLastPathUpdate = 0
+                                        fallbackLastPathTarget = nil
+                                        lastMoveTarget = nil
+                                        Status.Text = "Stuck – using pathfinding"
+                                    end
+                                elseif stuckTimer < 0 then
+                                    -- Grace period: count up toward zero
+                                    stuckTimer = math.min(stuckTimer + deltaTime, 0)
                                 end
                             else
-                                stuckTimer     = 0
+                                stuckTimer = 0
                                 if fallbackActive then
-                                    fallbackActive         = false
-                                    lastMoveTarget         = nil
-                                    fallbackPath           = nil
-                                    fallbackTarget         = nil
+                                    fallbackActive = false
+                                    lastMoveTarget = nil
+                                    fallbackPath = nil
+                                    fallbackTarget = nil
                                     fallbackLastPathUpdate = 0
                                     fallbackLastPathTarget = nil
                                 end
