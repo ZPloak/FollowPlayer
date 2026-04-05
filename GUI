@@ -281,7 +281,9 @@ local stuckTimer        = 0
 local fallbackPath      = nil
 local fallbackWaypointIndex = 1
 local fallbackTarget    = nil
-local fallbackRecompute = false
+-- NEW: extra tracking variables for proper fallback recompute
+local fallbackLastPathUpdate = 0
+local fallbackLastPathTarget = nil
 
 local lastSeatExitTime  = 0
 local lastMoveTarget    = nil
@@ -303,11 +305,9 @@ local function getRayParams()
 	return cachedRayParams
 end
 
--- Improved anti‑void: check ground below a point
 local function isSafePosition(pos)
 	local params = getRayParams()
 	if not params then return false end
-	-- Cast from 20 studs above down 200 studs to catch jumps
 	local result = Workspace:Raycast(pos + Vector3.new(0, 20, 0), Vector3.new(0, -200, 0), params)
 	return result ~= nil
 end
@@ -361,6 +361,8 @@ local function stopFollowing()
 	lastMoveTarget = nil
 	fallbackPath = nil
 	fallbackTarget = nil
+	fallbackLastPathUpdate = 0
+	fallbackLastPathTarget = nil
 
 	if recordedMode then
 		recordedMode = false
@@ -449,6 +451,8 @@ local function toggleRecordedMode()
 		lastMoveTarget = nil
 		fallbackPath = nil
 		fallbackTarget = nil
+		fallbackLastPathUpdate = 0
+		fallbackLastPathTarget = nil
 		RecordButton.Text = "Enable Recorded Mode"
 		Status.Text = "Recorded mode off"
 		Status.TextColor3 = Color3.fromRGB(100, 200, 255)
@@ -558,6 +562,8 @@ local function startFollowing()
 				lastMoveTarget = nil
 				fallbackPath   = nil
 				fallbackTarget = nil
+				fallbackLastPathUpdate = 0
+				fallbackLastPathTarget = nil
 			end
 
 			if not wasInRadius then
@@ -609,6 +615,8 @@ local function startFollowing()
 				lastMoveTarget = nil
 				fallbackPath   = nil
 				fallbackTarget = nil
+				fallbackLastPathUpdate = 0
+				fallbackLastPathTarget = nil
 			end
 
 			if recordDelayEnd then
@@ -678,19 +686,24 @@ local function startFollowing()
 							if moved < 0.5 then
 								stuckTimer = stuckTimer + deltaTime
 								if stuckTimer >= STUCK_TIMEOUT then
-									fallbackActive = true
-									stuckTimer     = 0
-									fallbackPath   = nil
-									fallbackTarget = nil
-									Status.Text    = "Stuck – using pathfinding"
+									fallbackActive         = true
+									stuckTimer             = 0
+									fallbackPath           = nil
+									fallbackTarget         = nil
+									fallbackLastPathUpdate = 0
+									fallbackLastPathTarget = nil
+									lastMoveTarget         = nil
+									Status.Text            = "Stuck – using pathfinding"
 								end
 							else
 								stuckTimer     = 0
 								if fallbackActive then
-									fallbackActive = false
-									lastMoveTarget = nil
-									fallbackPath   = nil
-									fallbackTarget = nil
+									fallbackActive         = false
+									lastMoveTarget         = nil
+									fallbackPath           = nil
+									fallbackTarget         = nil
+									fallbackLastPathUpdate = 0
+									fallbackLastPathTarget = nil
 								end
 							end
 						end
@@ -707,10 +720,28 @@ local function startFollowing()
 		end
 
 		-- ============================================================
-		-- FALLBACK MODE (activated when stuck during replay)
+		-- FALLBACK MODE — mirrors normal follow exactly, targets live player
 		-- ============================================================
 		if recordedMode and fallbackActive then
-			-- If the target is over unsafe ground, stop moving entirely
+			-- Exit when we've actually reached the current target position
+			if distance <= STOP_DISTANCE then
+				fallbackActive         = false
+				fallbackPath           = nil
+				fallbackTarget         = nil
+				fallbackLastPathUpdate = 0
+				fallbackLastPathTarget = nil
+				lastMoveTarget         = nil
+				stuckTimer             = 0
+				lastPosition           = nil
+				local nearestIdx = findNearestWaypointIndex(rootPart.Position)
+				replayIndex  = nearestIdx
+				isReplaying  = true
+				Status.Text  = "Resuming replay"
+				lastWasInside = isInside
+				lastTargetPos = targetRoot.Position
+				return
+			end
+
 			if not isSafePosition(targetRoot.Position) then
 				smoothMove(humanoid, rootPart.Position)
 				lastWasInside = isInside
@@ -718,10 +749,19 @@ local function startFollowing()
 				return
 			end
 
-			-- If no path exists or target moved too far from fallbackTarget, recompute
-			if not fallbackPath or not fallbackTarget or
-			   (targetRoot.Position - fallbackTarget).Magnitude > FALLBACK_RECOMPUTE_DIST then
-				fallbackTarget = targetRoot.Position
+			-- Recompute using exact same logic as normal follow below
+			local fbRecompute = false
+			if not fallbackPath then
+				fbRecompute = true
+			elseif not fallbackLastPathTarget
+				or (targetRoot.Position - fallbackLastPathTarget).Magnitude > FALLBACK_RECOMPUTE_DIST then
+				fbRecompute = true
+			elseif now - fallbackLastPathUpdate >= PATH_UPDATE_INTERVAL then
+				fbRecompute = true
+			end
+
+			if fbRecompute then
+				fallbackLastPathUpdate = now
 				local path = PathfindingService:CreatePath({
 					AgentRadius    = 2,
 					AgentHeight    = 5,
@@ -731,68 +771,43 @@ local function startFollowing()
 					WaypointSpacing = 4,
 				})
 				local success = pcall(function()
-					path:ComputeAsync(rootPart.Position, fallbackTarget)
+					path:ComputeAsync(rootPart.Position, targetRoot.Position)
 				end)
 				if success and path.Status == Enum.PathStatus.Success then
-					fallbackPath = path
-					fallbackWaypointIndex = 1
+					fallbackPath           = path
+					fallbackWaypointIndex  = 1
+					fallbackLastPathTarget = targetRoot.Position
 				else
 					fallbackPath = nil
 				end
 			end
 
-			-- If close enough to the fallback target, exit fallback and continue replay
-			if (rootPart.Position - fallbackTarget).Magnitude < STOP_DISTANCE then
-				fallbackActive = false
-				fallbackPath = nil
-				fallbackTarget = nil
-				lastMoveTarget = nil
-
-				-- Find the nearest recorded waypoint to current position to resume from there
-				if #recordedPositions > 0 then
-					local nearestIdx = findNearestWaypointIndex(rootPart.Position)
-					replayIndex = nearestIdx
-					Status.Text = "Resuming replay from waypoint " .. replayIndex
-				else
-					Status.Text = "Resuming replay (no path)"
-				end
-
-				lastWasInside = isInside
-				lastTargetPos = targetRoot.Position
-				return
-			end
-
-			-- Follow the fallback path
 			if fallbackPath then
 				local waypoints = fallbackPath:GetWaypoints()
 				if fallbackWaypointIndex <= #waypoints then
-					local waypoint = waypoints[fallbackWaypointIndex]
-					if isSafePosition(waypoint.Position) then
-						smoothMove(humanoid, waypoint.Position)
+					local wp = waypoints[fallbackWaypointIndex]
+					if isSafePosition(wp.Position) then
+						smoothMove(humanoid, wp.Position)
 					else
 						smoothMove(humanoid, rootPart.Position)
 					end
-					if waypoint.Action == Enum.PathWaypointAction.Jump then
+					if wp.Action == Enum.PathWaypointAction.Jump then
 						humanoid.Jump = true
 					else
 						humanoid.Jump = false
 					end
-					if (rootPart.Position - waypoint.Position).Magnitude < WAYPOINT_RADIUS then
+					if (rootPart.Position - wp.Position).Magnitude < WAYPOINT_RADIUS then
 						fallbackWaypointIndex = fallbackWaypointIndex + 1
 					end
 				else
-					-- Path exhausted, exit fallback
-					fallbackActive = false
-					fallbackPath = nil
-					fallbackTarget = nil
+					-- Waypoints exhausted but not at target: force fresh recompute
+					fallbackPath           = nil
+					fallbackLastPathTarget = nil
 				end
 			else
-				-- No path – move directly if safe, else stand still
-				if isSafePosition(targetRoot.Position) then
-					smoothMove(humanoid, targetRoot.Position)
-				else
-					smoothMove(humanoid, rootPart.Position)
-				end
+				-- Path failed: bypass smoothMove tolerance and move directly
+				lastMoveTarget = nil
+				smoothMove(humanoid, targetRoot.Position)
 			end
 
 			lastWasInside = isInside
