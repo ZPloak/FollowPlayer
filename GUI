@@ -1,9 +1,8 @@
--- Advanced Follower GUI (Executor‑Optimized + Jump Fix)
--- Fixed: After jumping, follower no longer gets stuck and doesn't switch to fallback unnecessarily.
+-- Advanced Follower GUI (Ultimate Executor‑Ready)
+-- Extra safety: PathfindingService check, no forced Jump = false, proper character wait.
 
 local player = game.Players.LocalPlayer
 
--- Wait for PlayerGui (some executors need this)
 local PlayerGui = player:WaitForChild("PlayerGui", 5)
 if not PlayerGui then
     warn("PlayerGui not found – aborting")
@@ -14,6 +13,9 @@ local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
+
+-- If PathfindingService is missing (rare but possible in some executors), disable it
+local HAS_PATHFINDING = pcall(function() return PathfindingService:CreatePath end) and PathfindingService ~= nil
 
 -- Settings
 local STOP_DISTANCE         = 8
@@ -27,9 +29,9 @@ local WAYPOINT_RADIUS       = 8
 local REPLAY_ADVANCE_RADIUS = 7
 local SIDE_UPDATE_INTERVAL  = 0.5
 local FALLBACK_RECOMPUTE_DIST = 10
+local FALLBACK_TARGET_MOVED_THRESHOLD = 6
 
--- Disable safety raycasts if they cause issues (many executors block them)
-local USE_SAFETY_RAYCAST = false   -- set to true if your executor supports raycasts
+local USE_SAFETY_RAYCAST = false
 
 -- Destroy old GUI
 local oldGui = PlayerGui:FindFirstChild("AdvancedFollowGui")
@@ -50,7 +52,7 @@ MainFrame.Size = UDim2.new(0, 340, 0, 300)
 MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
-MainFrame.Draggable = true   -- built‑in dragging works in most executors
+MainFrame.Draggable = true
 
 local Corner = Instance.new("UICorner")
 Corner.CornerRadius = UDim.new(0, 12)
@@ -236,6 +238,7 @@ local wasInRadius       = false
 local currentSide       = nil
 local sideTargetPosition = nil
 local lastSideUpdate    = 0
+local sideReached       = false
 
 local recordedMode      = false
 local recordedPositions = {}
@@ -256,14 +259,13 @@ local fallbackTarget    = nil
 local fallbackLastPathUpdate = 0
 local fallbackLastPathTarget = nil
 
+local fallbackLastMoveTarget = nil
 local lastSeatExitTime  = 0
 local lastMoveTarget    = nil
 local lastStatusUpdate  = 0
 
--- Simplified safe position check (disabled by default)
 local function isSafePosition(pos)
     if not USE_SAFETY_RAYCAST then return true end
-    -- Raycast code (optional) – omitted for brevity
     return true
 end
 
@@ -271,6 +273,16 @@ local function smoothMove(humanoid, targetPos)
     if not targetPos or not humanoid then return end
     if lastMoveTarget and (targetPos - lastMoveTarget).Magnitude < MOVE_TOLERANCE then return end
     lastMoveTarget = targetPos
+    pcall(function()
+        humanoid:MoveTo(targetPos)
+    end)
+end
+
+local FALLBACK_MOVE_TOLERANCE = 0.05
+local function fallbackSmoothMove(humanoid, targetPos)
+    if not targetPos or not humanoid then return end
+    if fallbackLastMoveTarget and (targetPos - fallbackLastMoveTarget).Magnitude < FALLBACK_MOVE_TOLERANCE then return end
+    fallbackLastMoveTarget = targetPos
     pcall(function()
         humanoid:MoveTo(targetPos)
     end)
@@ -303,23 +315,30 @@ local function isSeated(humanoid)
     return humanoid and humanoid.SeatPart ~= nil
 end
 
+local function resetFallbackState()
+    fallbackActive         = false
+    fallbackPath           = nil
+    fallbackTarget         = nil
+    fallbackLastPathUpdate = 0
+    fallbackLastPathTarget = nil
+    fallbackLastMoveTarget = nil
+    fallbackWaypointIndex  = 1
+    stuckTimer             = 0
+    lastPosition           = nil
+end
+
 local function stopFollowing()
     isFollowing = false
     targetPlayer = nil
     wasInRadius = false
     currentSide = nil
     sideTargetPosition = nil
+    sideReached = false
     recordDelayEnd = nil
     isReplaying = false
     jumpTriggered = false
-    fallbackActive = false
-    stuckTimer = 0
-    lastPosition = nil
     lastMoveTarget = nil
-    fallbackPath = nil
-    fallbackTarget = nil
-    fallbackLastPathUpdate = 0
-    fallbackLastPathTarget = nil
+    resetFallbackState()
 
     if recordedMode then
         recordedMode = false
@@ -407,13 +426,8 @@ local function toggleRecordedMode()
         replayIndex = 1
         recordDelayEnd = nil
         isReplaying = false
-        fallbackActive = false
-        stuckTimer = 0
         lastMoveTarget = nil
-        fallbackPath = nil
-        fallbackTarget = nil
-        fallbackLastPathUpdate = 0
-        fallbackLastPathTarget = nil
+        resetFallbackState()
         RecordButton.Text = "Enable Recorded Mode"
         Status.Text = "Recorded mode off"
         Status.TextColor3 = Color3.fromRGB(100, 200, 255)
@@ -424,8 +438,7 @@ local function toggleAutoSwitch()
     autoSwitchEnabled = not autoSwitchEnabled
     AutoSwitchButton.Text = autoSwitchEnabled and "Auto‑Switcher: ON" or "Auto‑Switcher: OFF"
     if not autoSwitchEnabled then
-        fallbackActive = false
-        stuckTimer = 0
+        resetFallbackState()
     end
 end
 
@@ -492,7 +505,6 @@ local function startFollowing()
         local isInside = distance <= STOP_DISTANCE
         local now = tick()
 
-        -- Status label
         if now - lastStatusUpdate > 0.2 then
             lastStatusUpdate = now
             local mode = ""
@@ -511,38 +523,30 @@ local function startFollowing()
                 or  Color3.fromRGB(100, 200, 255)
         end
 
-        -- Side‑stand behaviour when close
+        -- Side‑stand
         if isInside then
             if recordedMode then
                 recordDelayEnd = nil
                 isReplaying    = false
                 jumpTriggered  = false
-                fallbackActive = false
-                stuckTimer     = 0
                 lastMoveTarget = nil
-                fallbackPath   = nil
-                fallbackTarget = nil
-                fallbackLastPathUpdate = 0
-                fallbackLastPathTarget = nil
+                resetFallbackState()
             end
 
             if not wasInRadius then
-                wasInRadius          = true
-                currentSide          = (math.random(1, 2) == 1) and "left" or "right"
-                sideTargetPosition   = getSidePosition(targetRoot, currentSide).Position
-                lastSideUpdateTime   = now
+                wasInRadius        = true
+                sideReached        = false
+                currentSide        = (math.random(1, 2) == 1) and "left" or "right"
+                sideTargetPosition = getSidePosition(targetRoot, currentSide).Position
                 if isSafePosition(sideTargetPosition) then
                     smoothMove(humanoid, sideTargetPosition)
                 end
-            else
-                if now - lastSideUpdateTime >= SIDE_UPDATE_INTERVAL then
-                    sideTargetPosition = getSidePosition(targetRoot, currentSide).Position
-                    lastSideUpdateTime = now
-                end
+            elseif not sideReached then
                 if sideTargetPosition then
-                    if (rootPart.Position - sideTargetPosition).Magnitude < 2 then
-                        smoothMove(humanoid, rootPart.Position)
-                    elseif isSafePosition(sideTargetPosition) then
+                    local distToSide = (rootPart.Position - sideTargetPosition).Magnitude
+                    if distToSide <= 2 then
+                        sideReached = true
+                    else
                         smoothMove(humanoid, sideTargetPosition)
                     end
                 end
@@ -556,10 +560,11 @@ local function startFollowing()
                 wasInRadius        = false
                 currentSide        = nil
                 sideTargetPosition = nil
+                sideReached        = false
             end
         end
 
-        -- Recorded mode replay (with jump fix)
+        -- Recorded mode replay
         if recordedMode then
             local targetMoved = lastTargetPos and (targetRoot.Position - lastTargetPos).Magnitude < 20
             if not fallbackActive and lastWasInside and not isInside and targetMoved then
@@ -569,13 +574,8 @@ local function startFollowing()
                 recordDelayEnd = tick() + RECORD_DELAY
                 isReplaying    = false
                 jumpTriggered  = false
-                fallbackActive = false
-                stuckTimer     = 0
                 lastMoveTarget = nil
-                fallbackPath   = nil
-                fallbackTarget = nil
-                fallbackLastPathUpdate = 0
-                fallbackLastPathTarget = nil
+                resetFallbackState()
             end
 
             if recordDelayEnd then
@@ -584,7 +584,6 @@ local function startFollowing()
                     isReplaying    = true
                     replayIndex    = 1
                     jumpTriggered  = false
-                    fallbackActive = false
                 else
                     smoothMove(humanoid, rootPart.Position)
                     lastWasInside = isInside
@@ -603,19 +602,16 @@ local function startFollowing()
                         smoothMove(humanoid, rootPart.Position)
                     end
 
-                    -- Jump handling with grace period
                     local justJumped = false
                     if recordedJumpIndices[replayIndex] and not jumpTriggered then
                         humanoid.Jump = true
                         jumpTriggered = true
                         justJumped = true
-                        -- Negative stuckTimer = grace period (disable stuck detection)
                         stuckTimer = -1.0
                     elseif jumpTriggered then
                         if humanoid.FloorMaterial ~= Enum.Material.Air then
-                            -- Still in air, do nothing
+                            -- still in air
                         else
-                            -- Landed
                             humanoid.Jump = false
                             jumpTriggered = false
                             stuckTimer = 0
@@ -624,18 +620,15 @@ local function startFollowing()
                         jumpTriggered = false
                     end
 
-                    -- Waypoint advance logic
                     local advance = false
                     local distToTarget = (rootPart.Position - targetPos).Magnitude
-                    
+
                     if recordedJumpIndices[replayIndex] then
-                        -- For jump waypoints: use larger radius and check landing
                         local horizontalDist = (Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z) -
                                                 Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
                         if horizontalDist < REPLAY_ADVANCE_RADIUS + 3 then
                             advance = true
                         elseif not jumpTriggered and not justJumped then
-                            -- Landed after jump
                             advance = true
                         end
                     else
@@ -651,7 +644,6 @@ local function startFollowing()
                         lastMoveTarget = nil
                     end
 
-                    -- Stuck detection with grace period
                     if autoSwitchEnabled then
                         if lastPosition then
                             local moved = (rootPart.Position - lastPosition).Magnitude
@@ -660,27 +652,23 @@ local function startFollowing()
                                     stuckTimer = stuckTimer + deltaTime
                                     if stuckTimer >= STUCK_TIMEOUT then
                                         fallbackActive = true
-                                        stuckTimer = 0
                                         fallbackPath = nil
-                                        fallbackTarget = nil
                                         fallbackLastPathUpdate = 0
                                         fallbackLastPathTarget = nil
+                                        fallbackLastMoveTarget = nil
+                                        fallbackWaypointIndex  = 1
+                                        stuckTimer = 0
                                         lastMoveTarget = nil
                                         Status.Text = "Stuck – using pathfinding"
                                     end
                                 elseif stuckTimer < 0 then
-                                    -- Grace period: count up toward zero
                                     stuckTimer = math.min(stuckTimer + deltaTime, 0)
                                 end
                             else
                                 stuckTimer = 0
                                 if fallbackActive then
-                                    fallbackActive = false
                                     lastMoveTarget = nil
-                                    fallbackPath = nil
-                                    fallbackTarget = nil
-                                    fallbackLastPathUpdate = 0
-                                    fallbackLastPathTarget = nil
+                                    resetFallbackState()
                                 end
                             end
                         end
@@ -696,20 +684,13 @@ local function startFollowing()
             end
         end
 
-        -- FALLBACK MODE
+        -- FALLBACK MODE (executor-safe)
         if recordedMode and fallbackActive then
             if distance <= STOP_DISTANCE then
-                fallbackActive         = false
-                fallbackPath           = nil
-                fallbackTarget         = nil
-                fallbackLastPathUpdate = 0
-                fallbackLastPathTarget = nil
-                lastMoveTarget         = nil
-                stuckTimer             = 0
-                lastPosition           = nil
                 local nearestIdx = findNearestWaypointIndex(rootPart.Position)
                 replayIndex  = nearestIdx
                 isReplaying  = true
+                resetFallbackState()
                 Status.Text  = "Resuming replay"
                 lastWasInside = isInside
                 lastTargetPos = targetRoot.Position
@@ -717,39 +698,48 @@ local function startFollowing()
             end
 
             if not isSafePosition(targetRoot.Position) then
-                smoothMove(humanoid, rootPart.Position)
+                fallbackSmoothMove(humanoid, rootPart.Position)
                 lastWasInside = isInside
                 lastTargetPos = targetRoot.Position
                 return
             end
 
-            local fbRecompute = false
+            local needRecompute = false
             if not fallbackPath then
-                fbRecompute = true
-            elseif not fallbackLastPathTarget
-                or (targetRoot.Position - fallbackLastPathTarget).Magnitude > FALLBACK_RECOMPUTE_DIST then
-                fbRecompute = true
-            elseif now - fallbackLastPathUpdate >= PATH_UPDATE_INTERVAL then
-                fbRecompute = true
+                needRecompute = true
+            elseif fallbackWaypointIndex > #fallbackPath:GetWaypoints() then
+                needRecompute = true
+            elseif fallbackLastPathTarget then
+                local targetDrift = (targetRoot.Position - fallbackLastPathTarget).Magnitude
+                if targetDrift > FALLBACK_TARGET_MOVED_THRESHOLD
+                    and (now - fallbackLastPathUpdate) >= PATH_UPDATE_INTERVAL then
+                    needRecompute = true
+                end
             end
 
-            if fbRecompute then
+            if needRecompute and HAS_PATHFINDING then
                 fallbackLastPathUpdate = now
                 local path = PathfindingService:CreatePath({
-                    AgentRadius    = 2,
-                    AgentHeight    = 5,
-                    AgentCanJump   = true,
+                    AgentRadius     = 2,
+                    AgentHeight     = 5,
+                    AgentCanJump    = true,
                     AgentJumpHeight = 7.5,
-                    AgentMaxSlope  = 45,
+                    AgentMaxSlope   = 45,
                     WaypointSpacing = 4,
                 })
                 local success = pcall(function()
                     path:ComputeAsync(rootPart.Position, targetRoot.Position)
                 end)
                 if success and path.Status == Enum.PathStatus.Success then
+                    local wps = path:GetWaypoints()
+                    local startIdx = 1
+                    if #wps > 1 and (rootPart.Position - wps[1].Position).Magnitude < WAYPOINT_RADIUS then
+                        startIdx = 2
+                    end
                     fallbackPath           = path
-                    fallbackWaypointIndex  = 1
+                    fallbackWaypointIndex  = startIdx
                     fallbackLastPathTarget = targetRoot.Position
+                    fallbackLastMoveTarget = nil
                 else
                     fallbackPath = nil
                 end
@@ -757,28 +747,32 @@ local function startFollowing()
 
             if fallbackPath then
                 local waypoints = fallbackPath:GetWaypoints()
+                while fallbackWaypointIndex <= #waypoints do
+                    local wp = waypoints[fallbackWaypointIndex]
+                    if (rootPart.Position - wp.Position).Magnitude < WAYPOINT_RADIUS then
+                        fallbackWaypointIndex = fallbackWaypointIndex + 1
+                        fallbackLastMoveTarget = nil
+                    else
+                        break
+                    end
+                end
+
                 if fallbackWaypointIndex <= #waypoints then
                     local wp = waypoints[fallbackWaypointIndex]
                     if isSafePosition(wp.Position) then
-                        smoothMove(humanoid, wp.Position)
+                        fallbackSmoothMove(humanoid, wp.Position)
                     else
-                        smoothMove(humanoid, rootPart.Position)
+                        fallbackSmoothMove(humanoid, rootPart.Position)
                     end
                     if wp.Action == Enum.PathWaypointAction.Jump then
                         humanoid.Jump = true
-                    else
-                        humanoid.Jump = false
-                    end
-                    if (rootPart.Position - wp.Position).Magnitude < WAYPOINT_RADIUS then
-                        fallbackWaypointIndex = fallbackWaypointIndex + 1
                     end
                 else
-                    fallbackPath           = nil
-                    fallbackLastPathTarget = nil
+                    fallbackPath = nil
                 end
             else
-                lastMoveTarget = nil
-                smoothMove(humanoid, targetRoot.Position)
+                fallbackLastMoveTarget = nil
+                fallbackSmoothMove(humanoid, targetRoot.Position)
             end
 
             lastWasInside = isInside
@@ -787,73 +781,84 @@ local function startFollowing()
         end
 
         -- NORMAL FOLLOWING
-        local recompute = false
-        if not currentPath then
-            recompute = true
-        elseif not lastPathTarget or (targetRoot.Position - lastPathTarget).Magnitude > 5 then
-            recompute = true
-        elseif now - lastPathUpdate >= PATH_UPDATE_INTERVAL then
-            recompute = true
-        end
+        if HAS_PATHFINDING then
+            local recompute = false
+            if not currentPath then
+                recompute = true
+            elseif not lastPathTarget or (targetRoot.Position - lastPathTarget).Magnitude > 5 then
+                recompute = true
+            elseif now - lastPathUpdate >= PATH_UPDATE_INTERVAL then
+                recompute = true
+            end
 
-        if recompute then
-            lastPathUpdate = now
-            if isSafePosition(targetRoot.Position) then
-                local path = PathfindingService:CreatePath({
-                    AgentRadius    = 2,
-                    AgentHeight    = 5,
-                    AgentCanJump   = true,
-                    AgentJumpHeight = 7.5,
-                    AgentMaxSlope  = 45,
-                    WaypointSpacing = 4,
-                })
-                local success = pcall(function()
-                    path:ComputeAsync(rootPart.Position, targetRoot.Position)
-                end)
-                if success and path.Status == Enum.PathStatus.Success then
-                    currentPath = path
-                    currentWaypointIndex = 1
-                    lastPathTarget = targetRoot.Position
+            if recompute then
+                lastPathUpdate = now
+                if isSafePosition(targetRoot.Position) then
+                    local path = PathfindingService:CreatePath({
+                        AgentRadius    = 2,
+                        AgentHeight    = 5,
+                        AgentCanJump   = true,
+                        AgentJumpHeight = 7.5,
+                        AgentMaxSlope  = 45,
+                        WaypointSpacing = 4,
+                    })
+                    local success = pcall(function()
+                        path:ComputeAsync(rootPart.Position, targetRoot.Position)
+                    end)
+                    if success and path.Status == Enum.PathStatus.Success then
+                        currentPath = path
+                        currentWaypointIndex = 1
+                        lastPathTarget = targetRoot.Position
+                    else
+                        currentPath = nil
+                    end
+                else
+                    currentPath = nil
+                end
+            end
+
+            if distance < directMoveThreshold then
+                currentPath = nil
+                if isSafePosition(targetRoot.Position) then
+                    smoothMove(humanoid, targetRoot.Position)
+                else
+                    smoothMove(humanoid, rootPart.Position)
+                end
+            elseif currentPath then
+                local waypoints = currentPath:GetWaypoints()
+                if currentWaypointIndex <= #waypoints then
+                    local waypoint = waypoints[currentWaypointIndex]
+                    if isSafePosition(waypoint.Position) then
+                        smoothMove(humanoid, waypoint.Position)
+                    else
+                        smoothMove(humanoid, rootPart.Position)
+                    end
+                    if waypoint.Action == Enum.PathWaypointAction.Jump then
+                        humanoid.Jump = true
+                    end
+                    if (rootPart.Position - waypoint.Position).Magnitude < WAYPOINT_RADIUS then
+                        currentWaypointIndex = currentWaypointIndex + 1
+                    end
                 else
                     currentPath = nil
                 end
             else
-                currentPath = nil
-            end
-        end
-
-        if distance < directMoveThreshold then
-            currentPath = nil
-            if isSafePosition(targetRoot.Position) then
-                smoothMove(humanoid, targetRoot.Position)
-            else
-                smoothMove(humanoid, rootPart.Position)
-            end
-        elseif currentPath then
-            local waypoints = currentPath:GetWaypoints()
-            if currentWaypointIndex <= #waypoints then
-                local waypoint = waypoints[currentWaypointIndex]
-                if isSafePosition(waypoint.Position) then
-                    smoothMove(humanoid, waypoint.Position)
+                if isSafePosition(targetRoot.Position) then
+                    smoothMove(humanoid, targetRoot.Position)
                 else
                     smoothMove(humanoid, rootPart.Position)
                 end
-                if waypoint.Action == Enum.PathWaypointAction.Jump then
-                    humanoid.Jump = true
-                else
-                    humanoid.Jump = false
-                end
-                if (rootPart.Position - waypoint.Position).Magnitude < WAYPOINT_RADIUS then
-                    currentWaypointIndex = currentWaypointIndex + 1
-                end
-            else
-                currentPath = nil
             end
         else
-            if isSafePosition(targetRoot.Position) then
-                smoothMove(humanoid, targetRoot.Position)
-            else
+            -- No PathfindingService – direct move only
+            if distance < directMoveThreshold then
                 smoothMove(humanoid, rootPart.Position)
+            else
+                if isSafePosition(targetRoot.Position) then
+                    smoothMove(humanoid, targetRoot.Position)
+                else
+                    smoothMove(humanoid, rootPart.Position)
+                end
             end
         end
 
