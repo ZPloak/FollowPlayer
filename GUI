@@ -1,10 +1,15 @@
 -- Advanced Follower GUI (Executor‑Optimized + Jump Fix + Smooth Fallback + Anti‑Void)
--- FIXES: 
---   1. Raycast ignores ALL players → follower won't walk off cliffs.
---   2. Fallback stutter eliminated via MoveTo throttling + path recompute debounce.
---   3. Direct movement for short distances.
+-- FIXES:
+--   1. Anti‑void works on R6 & R15 (raycast ignores all player characters).
+--   2. Manual movement override – script stops interfering when you move.
+--   3. Stutter eliminated – MoveTo throttling + path recompute debounce + manual control detection.
 
 local player = game.Players.LocalPlayer
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
 
 local PlayerGui = player:WaitForChild("PlayerGui", 5)
 if not PlayerGui then
@@ -12,17 +17,12 @@ if not PlayerGui then
 	return
 end
 
-local RunService        = game:GetService("RunService")
-local PathfindingService = game:GetService("PathfindingService")
-local Players           = game:GetService("Players")
-local Workspace         = game:GetService("Workspace")
-
 -- ══════════════════════════════════════════════
 --  Settings
 -- ══════════════════════════════════════════════
 local STOP_DISTANCE               = 8
-local PATH_UPDATE_INTERVAL        = 0.5        -- normal path update
-local FALLBACK_PATH_UPDATE_INTERVAL = 0.4      -- fallback path update (slightly faster)
+local PATH_UPDATE_INTERVAL        = 0.5
+local FALLBACK_PATH_UPDATE_INTERVAL = 0.4
 local SIDE_DISTANCE               = 4
 local RECORD_DELAY                = 0.3
 local STUCK_TIMEOUT               = 2
@@ -31,151 +31,151 @@ local MOVE_TOLERANCE              = 0.3
 local WAYPOINT_RADIUS             = 8
 local REPLAY_ADVANCE_RADIUS       = 7
 local FALLBACK_MOVE_TOLERANCE     = 0.05
-local DIRECT_MOVE_DISTANCE        = 15        -- if target is closer than this, move directly (no pathfinding)
-local MOVETO_THROTTLE             = 0.1       -- seconds between MoveTo calls
+local DIRECT_MOVE_DISTANCE        = 15
+local MOVETO_THROTTLE             = 0.1
+local MANUAL_CONTROL_COOLDOWN     = 0.5   -- seconds after input stops before resuming
 
 -- Anti‑void
 local USE_SAFETY_RAYCAST          = true
-local SAFE_GROUND_MAX_DROP        = 40
+local SAFE_GROUND_MAX_DROP        = 50    -- increased for R6
 local SAFE_RAYCAST_CACHE_TIME     = 0.15
 local safetyCache                 = {}
 
 -- ══════════════════════════════════════════════
---  GUI (same as before)
+--  GUI (same as before, but kept minimal)
 -- ══════════════════════════════════════════════
 local oldGui = PlayerGui:FindFirstChild("AdvancedFollowGui")
 if oldGui then oldGui:Destroy() end
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name            = "AdvancedFollowGui"
-ScreenGui.ResetOnSpawn    = false
-ScreenGui.ZIndexBehavior  = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent          = PlayerGui
+ScreenGui.Name = "AdvancedFollowGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = PlayerGui
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Name             = "MainFrame"
-MainFrame.Parent           = ScreenGui
-MainFrame.AnchorPoint      = Vector2.new(0.5, 0.5)
-MainFrame.Position         = UDim2.new(0.5, 0, 0.5, 0)
-MainFrame.Size             = UDim2.new(0, 340, 0, 300)
+MainFrame.Name = "MainFrame"
+MainFrame.Parent = ScreenGui
+MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+MainFrame.Size = UDim2.new(0, 340, 0, 300)
 MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-MainFrame.BorderSizePixel  = 0
-MainFrame.Active           = true
-MainFrame.Draggable        = true
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
 
 local Corner = Instance.new("UICorner")
 Corner.CornerRadius = UDim.new(0, 12)
 Corner.Parent = MainFrame
 
 local Header = Instance.new("Frame")
-Header.Parent           = MainFrame
-Header.Size             = UDim2.new(1, 0, 0, 40)
+Header.Parent = MainFrame
+Header.Size = UDim2.new(1, 0, 0, 40)
 Header.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-Header.BorderSizePixel  = 0
+Header.BorderSizePixel = 0
 
 local HeaderCorner = Instance.new("UICorner")
 HeaderCorner.CornerRadius = UDim.new(0, 12)
 HeaderCorner.Parent = Header
 
 local Title = Instance.new("TextLabel")
-Title.Parent           = Header
-Title.Size             = UDim2.new(1, -40, 1, 0)
-Title.Position         = UDim2.new(0, 12, 0, 0)
+Title.Parent = Header
+Title.Size = UDim2.new(1, -40, 1, 0)
+Title.Position = UDim2.new(0, 12, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Font             = Enum.Font.GothamBold
-Title.Text             = "Follower"
-Title.TextColor3       = Color3.fromRGB(255, 255, 255)
-Title.TextSize         = 18
-Title.TextXAlignment   = Enum.TextXAlignment.Left
+Title.Font = Enum.Font.GothamBold
+Title.Text = "Follower"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 18
+Title.TextXAlignment = Enum.TextXAlignment.Left
 
 local MinimizeButton = Instance.new("TextButton")
-MinimizeButton.Parent           = Header
-MinimizeButton.AnchorPoint      = Vector2.new(1, 0.5)
-MinimizeButton.Position         = UDim2.new(1, -8, 0.5, 0)
-MinimizeButton.Size             = UDim2.new(0, 28, 0, 28)
+MinimizeButton.Parent = Header
+MinimizeButton.AnchorPoint = Vector2.new(1, 0.5)
+MinimizeButton.Position = UDim2.new(1, -8, 0.5, 0)
+MinimizeButton.Size = UDim2.new(0, 28, 0, 28)
 MinimizeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-MinimizeButton.BorderSizePixel  = 0
-MinimizeButton.Font             = Enum.Font.GothamBold
-MinimizeButton.Text             = "−"
-MinimizeButton.TextColor3       = Color3.fromRGB(255, 255, 255)
-MinimizeButton.TextSize         = 22
-MinimizeButton.AutoButtonColor  = false
+MinimizeButton.BorderSizePixel = 0
+MinimizeButton.Font = Enum.Font.GothamBold
+MinimizeButton.Text = "−"
+MinimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+MinimizeButton.TextSize = 22
+MinimizeButton.AutoButtonColor = false
 
 local MinCorner = Instance.new("UICorner")
 MinCorner.CornerRadius = UDim.new(0, 8)
 MinCorner.Parent = MinimizeButton
 
 local Content = Instance.new("Frame")
-Content.Parent   = MainFrame
+Content.Parent = MainFrame
 Content.Position = UDim2.new(0, 0, 0, 44)
-Content.Size     = UDim2.new(1, 0, 1, -44)
+Content.Size = UDim2.new(1, 0, 1, -44)
 Content.BackgroundTransparency = 1
 
 local SearchLabel = Instance.new("TextLabel")
-SearchLabel.Parent           = Content
-SearchLabel.Position         = UDim2.new(0, 12, 0, 12)
-SearchLabel.Size             = UDim2.new(1, -24, 0, 20)
+SearchLabel.Parent = Content
+SearchLabel.Position = UDim2.new(0, 12, 0, 12)
+SearchLabel.Size = UDim2.new(1, -24, 0, 20)
 SearchLabel.BackgroundTransparency = 1
-SearchLabel.Font             = Enum.Font.Gotham
-SearchLabel.Text             = "Username or Display Name"
-SearchLabel.TextColor3       = Color3.fromRGB(180, 180, 190)
-SearchLabel.TextSize         = 12
-SearchLabel.TextXAlignment   = Enum.TextXAlignment.Left
+SearchLabel.Font = Enum.Font.Gotham
+SearchLabel.Text = "Username or Display Name"
+SearchLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
+SearchLabel.TextSize = 12
+SearchLabel.TextXAlignment = Enum.TextXAlignment.Left
 
 local SearchContainer = Instance.new("Frame")
-SearchContainer.Parent           = Content
-SearchContainer.Position         = UDim2.new(0, 12, 0, 36)
-SearchContainer.Size             = UDim2.new(1, -24, 0, 36)
+SearchContainer.Parent = Content
+SearchContainer.Position = UDim2.new(0, 12, 0, 36)
+SearchContainer.Size = UDim2.new(1, -24, 0, 36)
 SearchContainer.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-SearchContainer.BorderSizePixel  = 0
+SearchContainer.BorderSizePixel = 0
 
 local SearchCorner = Instance.new("UICorner")
 SearchCorner.CornerRadius = UDim.new(0, 8)
 SearchCorner.Parent = SearchContainer
 
 local SearchBar = Instance.new("TextBox")
-SearchBar.Parent             = SearchContainer
-SearchBar.Size               = UDim2.new(1, -12, 1, 0)
-SearchBar.Position           = UDim2.new(0, 8, 0, 0)
+SearchBar.Parent = SearchContainer
+SearchBar.Size = UDim2.new(1, -12, 1, 0)
+SearchBar.Position = UDim2.new(0, 8, 0, 0)
 SearchBar.BackgroundTransparency = 1
-SearchBar.Font               = Enum.Font.Gotham
-SearchBar.PlaceholderColor3  = Color3.fromRGB(100, 100, 110)
-SearchBar.PlaceholderText    = "Enter player name..."
-SearchBar.Text               = ""
-SearchBar.TextColor3         = Color3.fromRGB(255, 255, 255)
-SearchBar.TextSize           = 14
-SearchBar.TextXAlignment     = Enum.TextXAlignment.Left
-SearchBar.ClearTextOnFocus   = false
+SearchBar.Font = Enum.Font.Gotham
+SearchBar.PlaceholderColor3 = Color3.fromRGB(100, 100, 110)
+SearchBar.PlaceholderText = "Enter player name..."
+SearchBar.Text = ""
+SearchBar.TextColor3 = Color3.fromRGB(255, 255, 255)
+SearchBar.TextSize = 14
+SearchBar.TextXAlignment = Enum.TextXAlignment.Left
+SearchBar.ClearTextOnFocus = false
 
 local ButtonContainer = Instance.new("Frame")
-ButtonContainer.Parent   = Content
+ButtonContainer.Parent = Content
 ButtonContainer.Position = UDim2.new(0, 12, 0, 86)
-ButtonContainer.Size     = UDim2.new(1, -24, 0, 40)
+ButtonContainer.Size = UDim2.new(1, -24, 0, 40)
 ButtonContainer.BackgroundTransparency = 1
 
 local FollowButton = Instance.new("TextButton")
-FollowButton.Parent           = ButtonContainer
-FollowButton.Size             = UDim2.new(0.5, -6, 1, 0)
-FollowButton.Position         = UDim2.new(0, 0, 0, 0)
+FollowButton.Parent = ButtonContainer
+FollowButton.Size = UDim2.new(0.5, -6, 1, 0)
+FollowButton.Position = UDim2.new(0, 0, 0, 0)
 FollowButton.BackgroundColor3 = Color3.fromRGB(80, 120, 255)
-FollowButton.BorderSizePixel  = 0
-FollowButton.Font             = Enum.Font.GothamBold
-FollowButton.Text             = "Follow"
-FollowButton.TextColor3       = Color3.fromRGB(255, 255, 255)
-FollowButton.TextSize         = 16
-FollowButton.AutoButtonColor  = false
+FollowButton.BorderSizePixel = 0
+FollowButton.Font = Enum.Font.GothamBold
+FollowButton.Text = "Follow"
+FollowButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+FollowButton.TextSize = 16
+FollowButton.AutoButtonColor = false
 
 local CancelButton = Instance.new("TextButton")
-CancelButton.Parent           = ButtonContainer
-CancelButton.Size             = UDim2.new(0.5, -6, 1, 0)
-CancelButton.Position         = UDim2.new(0.5, 6, 0, 0)
+CancelButton.Parent = ButtonContainer
+CancelButton.Size = UDim2.new(0.5, -6, 1, 0)
+CancelButton.Position = UDim2.new(0.5, 6, 0, 0)
 CancelButton.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
-CancelButton.BorderSizePixel  = 0
-CancelButton.Font             = Enum.Font.GothamBold
-CancelButton.Text             = "Cancel"
-CancelButton.TextColor3       = Color3.fromRGB(255, 255, 255)
-CancelButton.TextSize         = 16
-CancelButton.AutoButtonColor  = false
+CancelButton.BorderSizePixel = 0
+CancelButton.Font = Enum.Font.GothamBold
+CancelButton.Text = "Cancel"
+CancelButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CancelButton.TextSize = 16
+CancelButton.AutoButtonColor = false
 
 local ButtonCorner = Instance.new("UICorner")
 ButtonCorner.CornerRadius = UDim.new(0, 8)
@@ -186,53 +186,53 @@ ButtonCorner2.CornerRadius = UDim.new(0, 8)
 ButtonCorner2.Parent = CancelButton
 
 local RecordButton = Instance.new("TextButton")
-RecordButton.Parent           = Content
-RecordButton.Position         = UDim2.new(0, 12, 0, 140)
-RecordButton.Size             = UDim2.new(1, -24, 0, 36)
+RecordButton.Parent = Content
+RecordButton.Position = UDim2.new(0, 12, 0, 140)
+RecordButton.Size = UDim2.new(1, -24, 0, 36)
 RecordButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
-RecordButton.BorderSizePixel  = 0
-RecordButton.Font             = Enum.Font.GothamBold
-RecordButton.Text             = "Enable Recorded Mode"
-RecordButton.TextColor3       = Color3.fromRGB(255, 255, 255)
-RecordButton.TextSize         = 14
-RecordButton.AutoButtonColor  = false
+RecordButton.BorderSizePixel = 0
+RecordButton.Font = Enum.Font.GothamBold
+RecordButton.Text = "Enable Recorded Mode"
+RecordButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+RecordButton.TextSize = 14
+RecordButton.AutoButtonColor = false
 
 local RecordCorner = Instance.new("UICorner")
 RecordCorner.CornerRadius = UDim.new(0, 8)
 RecordCorner.Parent = RecordButton
 
 local AutoSwitchButton = Instance.new("TextButton")
-AutoSwitchButton.Parent           = Content
-AutoSwitchButton.Position         = UDim2.new(0, 12, 0, 184)
-AutoSwitchButton.Size             = UDim2.new(1, -24, 0, 32)
+AutoSwitchButton.Parent = Content
+AutoSwitchButton.Position = UDim2.new(0, 12, 0, 184)
+AutoSwitchButton.Size = UDim2.new(1, -24, 0, 32)
 AutoSwitchButton.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-AutoSwitchButton.BorderSizePixel  = 0
-AutoSwitchButton.Font             = Enum.Font.GothamBold
-AutoSwitchButton.Text             = "Auto‑Switcher: ON"
-AutoSwitchButton.TextColor3       = Color3.fromRGB(255, 255, 255)
-AutoSwitchButton.TextSize         = 12
-AutoSwitchButton.AutoButtonColor  = false
+AutoSwitchButton.BorderSizePixel = 0
+AutoSwitchButton.Font = Enum.Font.GothamBold
+AutoSwitchButton.Text = "Auto‑Switcher: ON"
+AutoSwitchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+AutoSwitchButton.TextSize = 12
+AutoSwitchButton.AutoButtonColor = false
 
 local AutoSwitchCorner = Instance.new("UICorner")
 AutoSwitchCorner.CornerRadius = UDim.new(0, 8)
 AutoSwitchCorner.Parent = AutoSwitchButton
 
 local Status = Instance.new("TextLabel")
-Status.Parent           = Content
-Status.Position         = UDim2.new(0, 12, 1, -30)
-Status.Size             = UDim2.new(1, -24, 0, 22)
+Status.Parent = Content
+Status.Position = UDim2.new(0, 12, 1, -30)
+Status.Size = UDim2.new(1, -24, 0, 22)
 Status.BackgroundTransparency = 1
-Status.Font             = Enum.Font.Gotham
-Status.Text             = "Ready"
-Status.TextColor3       = Color3.fromRGB(200, 200, 200)
-Status.TextSize         = 12
-Status.TextXAlignment   = Enum.TextXAlignment.Center
+Status.Font = Enum.Font.Gotham
+Status.Text = "Ready"
+Status.TextColor3 = Color3.fromRGB(200, 200, 200)
+Status.TextSize = 12
+Status.TextXAlignment = Enum.TextXAlignment.Center
 
 local minimized = false
 MinimizeButton.MouseButton1Click:Connect(function()
 	minimized = not minimized
-	Content.Visible   = not minimized
-	MainFrame.Size    = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 300)
+	Content.Visible = not minimized
+	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 300)
 	MinimizeButton.Text = minimized and "+" or "−"
 	MainFrame.Draggable = not minimized
 end)
@@ -240,41 +240,64 @@ end)
 -- ══════════════════════════════════════════════
 --  State
 -- ══════════════════════════════════════════════
-local targetPlayer       = nil
-local isFollowing        = false
-local followConnection   = nil
+local targetPlayer = nil
+local isFollowing = false
+local followConnection = nil
 
-local wasInRadius        = false
-local currentSide        = nil
+local wasInRadius = false
+local currentSide = nil
 local sideTargetPosition = nil
-local sideReached        = false
+local sideReached = false
 
-local recordedMode         = false
-local recordedPositions    = {}
-local recordedJumpIndices  = {}
-local recordConnection     = nil
-local replayIndex          = 1
-local recordDelayEnd       = nil
-local isReplaying          = false
-local jumpTriggered        = false
+local recordedMode = false
+local recordedPositions = {}
+local recordedJumpIndices = {}
+local recordConnection = nil
+local replayIndex = 1
+local recordDelayEnd = nil
+local isReplaying = false
+local jumpTriggered = false
 
-local autoSwitchEnabled    = true
-local fallbackActive       = false
-local lastPosition         = nil
-local stuckTimer           = 0
-local fallbackPath         = nil
+local autoSwitchEnabled = true
+local fallbackActive = false
+local lastPosition = nil
+local stuckTimer = 0
+local fallbackPath = nil
 local fallbackWaypointIndex = 1
 local fallbackLastPathUpdate = 0
 local fallbackLastPathTarget = nil
 local fallbackLastMoveTarget = nil
-local lastMoveCallTime     = 0          -- throttling for MoveTo
-local lastMoveTargetPos    = nil
+local lastMoveCallTime = 0
+local lastMoveTargetPos = nil
 
-local lastSeatExitTime     = 0
-local lastStatusUpdate     = 0
+local lastSeatExitTime = 0
+local lastStatusUpdate = 0
+
+-- Manual movement override
+local manualControlActive = false
+local lastInputTime = 0
+local function checkManualMovement()
+	local char = player.Character
+	if not char then return false end
+	local hum = char:FindFirstChild("Humanoid")
+	if not hum then return false end
+	-- If MoveDirection length > 0.5, player is actively moving
+	local moving = hum.MoveDirection.Magnitude > 0.5
+	if moving then
+		manualControlActive = true
+		lastInputTime = tick()
+		return true
+	else
+		-- If no input for cooldown period, release manual control
+		if manualControlActive and (tick() - lastInputTime) > MANUAL_CONTROL_COOLDOWN then
+			manualControlActive = false
+		end
+		return false
+	end
+end
 
 -- ══════════════════════════════════════════════
---  Anti‑void: raycast (ignores all players)
+--  Anti‑void: raycast ignores all players (works on R6/R15)
 -- ══════════════════════════════════════════════
 local CACHE_GRID = 2
 local function cacheKey(pos)
@@ -285,6 +308,7 @@ local function makeRaycastParams()
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	local ignoreList = {}
+	-- Exclude every player's character and all their descendants
 	for _, plr in ipairs(Players:GetPlayers()) do
 		local char = plr.Character
 		if char then
@@ -304,9 +328,11 @@ local function isSafePosition(pos)
 	if cached and (now - cached.t) < SAFE_RAYCAST_CACHE_TIME then
 		return cached.safe
 	end
+	-- Start slightly above the position to avoid self-hit when standing
 	local origin = Vector3.new(pos.X, pos.Y + 3, pos.Z)
 	local direction = Vector3.new(0, -(SAFE_GROUND_MAX_DROP + 3), 0)
 	local result = Workspace:Raycast(origin, direction, makeRaycastParams())
+	-- If we hit something, it's safe ground (not a player)
 	local safe = result ~= nil
 	safetyCache[key] = { safe = safe, t = now }
 	return safe
@@ -323,12 +349,15 @@ local function pruneSafetyCache()
 end
 
 -- ══════════════════════════════════════════════
---  Throttled MoveTo (prevents stutter)
+--  Throttled MoveTo (with manual override)
 -- ══════════════════════════════════════════════
 local function throttledMoveTo(humanoid, targetPos, isFallback)
 	if not humanoid or not targetPos then return end
+	-- If manual control is active, do NOT override the player's movement
+	if manualControlActive then
+		return
+	end
 	local now = tick()
-	-- Only update if enough time passed OR target moved significantly (>1 stud)
 	if lastMoveCallTime and (now - lastMoveCallTime) < MOVETO_THROTTLE then
 		if lastMoveTargetPos and (targetPos - lastMoveTargetPos).Magnitude < 1.5 then
 			return
@@ -380,39 +409,40 @@ local function isSeated(humanoid)
 end
 
 local function resetFallbackState()
-	fallbackActive          = false
-	fallbackPath            = nil
-	fallbackTarget          = nil
-	fallbackLastPathUpdate  = 0
-	fallbackLastPathTarget  = nil
-	fallbackLastMoveTarget  = nil
-	fallbackWaypointIndex   = 1
-	stuckTimer              = 0
-	lastPosition            = nil
+	fallbackActive = false
+	fallbackPath = nil
+	fallbackTarget = nil
+	fallbackLastPathUpdate = 0
+	fallbackLastPathTarget = nil
+	fallbackLastMoveTarget = nil
+	fallbackWaypointIndex = 1
+	stuckTimer = 0
+	lastPosition = nil
 end
 
 local function stopFollowing()
-	isFollowing      = false
-	targetPlayer     = nil
-	wasInRadius      = false
-	currentSide      = nil
+	isFollowing = false
+	targetPlayer = nil
+	wasInRadius = false
+	currentSide = nil
 	sideTargetPosition = nil
-	sideReached      = false
-	recordDelayEnd   = nil
-	isReplaying      = false
-	jumpTriggered    = false
+	sideReached = false
+	recordDelayEnd = nil
+	isReplaying = false
+	jumpTriggered = false
 	resetFallbackState()
 	lastMoveCallTime = 0
 	lastMoveTargetPos = nil
+	manualControlActive = false
 
 	if recordedMode then
 		recordedMode = false
 		if recordConnection then recordConnection:Disconnect() end
-		recordedPositions   = {}
+		recordedPositions = {}
 		recordedJumpIndices = {}
-		replayIndex         = 1
-		RecordButton.Text   = "Enable Recorded Mode"
-		Status.Text         = "Recorded mode disabled"
+		replayIndex = 1
+		RecordButton.Text = "Enable Recorded Mode"
+		Status.Text = "Recorded mode disabled"
 	end
 
 	if followConnection then
@@ -427,28 +457,28 @@ local function stopFollowing()
 			pcall(function() hum:MoveTo(hum.Parent.HumanoidRootPart.Position) end)
 		end
 	end
-	Status.Text      = "Stopped"
+	Status.Text = "Stopped"
 	Status.TextColor3 = Color3.fromRGB(200, 200, 200)
 end
 
 local function startRecording()
 	if recordConnection then recordConnection:Disconnect() end
-	recordedPositions   = {}
+	recordedPositions = {}
 	recordedJumpIndices = {}
-	replayIndex         = 1
-	recordDelayEnd      = nil
-	isReplaying         = false
-	jumpTriggered       = false
-	local lastJumpState  = false
+	replayIndex = 1
+	recordDelayEnd = nil
+	isReplaying = false
+	jumpTriggered = false
+	local lastJumpState = false
 	local lastRecordTime = tick()
 	recordConnection = RunService.RenderStepped:Connect(function()
 		if not isFollowing or not targetPlayer or not targetPlayer.Character then return end
 		local targetChar = targetPlayer.Character
-		local localChar  = player.Character
+		local localChar = player.Character
 		if not targetChar or not localChar then return end
-		local targetRoot     = targetChar:FindFirstChild("HumanoidRootPart")
+		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
 		local targetHumanoid = targetChar:FindFirstChild("Humanoid")
-		local localRoot      = localChar:FindFirstChild("HumanoidRootPart")
+		local localRoot = localChar:FindFirstChild("HumanoidRootPart")
 		if not targetRoot or not localRoot or not targetHumanoid then return end
 		local distance = (targetRoot.Position - localRoot.Position).Magnitude
 		if distance > STOP_DISTANCE then
@@ -478,20 +508,20 @@ local function toggleRecordedMode()
 	recordedMode = not recordedMode
 	if recordedMode then
 		startRecording()
-		RecordButton.Text  = "Disable Recorded Mode"
-		Status.Text        = "Recording path"
-		Status.TextColor3  = Color3.fromRGB(255, 200, 100)
+		RecordButton.Text = "Disable Recorded Mode"
+		Status.Text = "Recording path"
+		Status.TextColor3 = Color3.fromRGB(255, 200, 100)
 	else
 		if recordConnection then recordConnection:Disconnect() end
-		recordedPositions   = {}
+		recordedPositions = {}
 		recordedJumpIndices = {}
-		replayIndex         = 1
-		recordDelayEnd      = nil
-		isReplaying         = false
+		replayIndex = 1
+		recordDelayEnd = nil
+		isReplaying = false
 		resetFallbackState()
-		RecordButton.Text  = "Enable Recorded Mode"
-		Status.Text        = "Recorded mode off"
-		Status.TextColor3  = Color3.fromRGB(100, 200, 255)
+		RecordButton.Text = "Enable Recorded Mode"
+		Status.Text = "Recorded mode off"
+		Status.TextColor3 = Color3.fromRGB(100, 200, 255)
 	end
 end
 
@@ -505,33 +535,34 @@ end
 
 local function findNearestWaypointIndex(pos)
 	if #recordedPositions == 0 then return 1 end
-	local bestIdx  = 1
+	local bestIdx = 1
 	local bestDist = (pos - recordedPositions[1]).Magnitude
 	for i = 2, #recordedPositions do
 		local d = (pos - recordedPositions[i]).Magnitude
 		if d < bestDist then
 			bestDist = d
-			bestIdx  = i
+			bestIdx = i
 		end
 	end
 	return bestIdx
 end
 
 -- ══════════════════════════════════════════════
---  Main follow loop (with stutter fixes)
+--  Main follow loop (with manual override and anti‑stutter)
 -- ══════════════════════════════════════════════
 local function startFollowing()
 	if followConnection then followConnection:Disconnect() end
 
-	local lastPathUpdate       = 0
-	local currentPath          = nil
+	local lastPathUpdate = 0
+	local currentPath = nil
 	local currentWaypointIndex = 0
-	local lastWasInside        = false
-	local lastPathTarget       = nil
-	local lastTargetPos        = nil
+	local lastWasInside = false
+	local lastPathTarget = nil
+	local lastTargetPos = nil
 
 	followConnection = RunService.RenderStepped:Connect(function(deltaTime)
 		pruneSafetyCache()
+		checkManualMovement() -- updates manualControlActive
 
 		if not isFollowing or not targetPlayer or not targetPlayer.Parent then
 			if targetPlayer and not targetPlayer.Parent then
@@ -541,33 +572,33 @@ local function startFollowing()
 			return
 		end
 
-		local character  = player.Character
+		local character = player.Character
 		local targetChar = targetPlayer.Character
 		if not character or not targetChar then return end
 
-		local humanoid       = character:FindFirstChild("Humanoid")
-		local rootPart       = character:FindFirstChild("HumanoidRootPart")
+		local humanoid = character:FindFirstChild("Humanoid")
+		local rootPart = character:FindFirstChild("HumanoidRootPart")
 		local targetHumanoid = targetChar:FindFirstChild("Humanoid")
-		local targetRoot     = targetChar:FindFirstChild("HumanoidRootPart")
+		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not rootPart or not targetRoot then return end
 
 		-- Anti‑seat
 		local followerSeated = isSeated(humanoid)
-		local targetSeated   = targetHumanoid and isSeated(targetHumanoid)
+		local targetSeated = targetHumanoid and isSeated(targetHumanoid)
 		if followerSeated and not targetSeated then
 			humanoid.Sit = false
 			local now = tick()
 			if now - lastSeatExitTime > 1.0 then
-				humanoid.Jump    = true
+				humanoid.Jump = true
 				lastSeatExitTime = now
-				Status.Text      = "Jumping off seat"
+				Status.Text = "Jumping off seat"
 			end
 			smoothMove(humanoid, rootPart.Position)
 		end
 
 		local distance = (targetRoot.Position - rootPart.Position).Magnitude
 		local isInside = distance <= STOP_DISTANCE
-		local now      = tick()
+		local now = tick()
 
 		-- Status
 		if now - lastStatusUpdate > 0.2 then
@@ -575,11 +606,12 @@ local function startFollowing()
 			local mode = ""
 			if recordedMode then
 				if fallbackActive then mode = " [FALLBACK]"
-				elseif isReplaying  then mode = " [REPLAY]"
-				else                     mode = " [REC]"
+				elseif isReplaying then mode = " [REPLAY]"
+				else mode = " [REC]"
 				end
 			end
-			Status.Text      = string.format("%s%s (%.0f)", targetPlayer.DisplayName, mode, distance)
+			local manual = manualControlActive and " [MANUAL]" or ""
+			Status.Text = string.format("%s%s%s (%.0f)", targetPlayer.DisplayName, mode, manual, distance)
 			Status.TextColor3 = recordedMode and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(100, 200, 255)
 		end
 
@@ -587,21 +619,21 @@ local function startFollowing()
 		if isInside then
 			if recordedMode then
 				recordDelayEnd = nil
-				isReplaying    = false
-				jumpTriggered  = false
+				isReplaying = false
+				jumpTriggered = false
 				resetFallbackState()
 			end
 			if not wasInRadius then
-				wasInRadius        = true
-				sideReached        = false
-				currentSide        = (math.random(1, 2) == 1) and "left" or "right"
-				local sidePos      = getSidePosition(targetRoot, currentSide).Position
+				wasInRadius = true
+				sideReached = false
+				currentSide = (math.random(1, 2) == 1) and "left" or "right"
+				local sidePos = getSidePosition(targetRoot, currentSide).Position
 				if isSafePosition(sidePos) then
 					sideTargetPosition = sidePos
 					smoothMove(humanoid, sideTargetPosition)
 				else
 					local otherSide = (currentSide == "left") and "right" or "left"
-					local altPos    = getSidePosition(targetRoot, otherSide).Position
+					local altPos = getSidePosition(targetRoot, otherSide).Position
 					sideTargetPosition = isSafePosition(altPos) and altPos or targetRoot.Position
 					smoothMove(humanoid, sideTargetPosition)
 				end
@@ -620,10 +652,10 @@ local function startFollowing()
 			return
 		else
 			if wasInRadius then
-				wasInRadius        = false
-				currentSide        = nil
+				wasInRadius = false
+				currentSide = nil
 				sideTargetPosition = nil
-				sideReached        = false
+				sideReached = false
 			end
 		end
 
@@ -631,21 +663,21 @@ local function startFollowing()
 		if recordedMode then
 			local targetMoved = lastTargetPos and (targetRoot.Position - lastTargetPos).Magnitude < 20
 			if not fallbackActive and lastWasInside and not isInside and targetMoved then
-				recordedPositions   = {}
+				recordedPositions = {}
 				recordedJumpIndices = {}
-				replayIndex         = 1
-				recordDelayEnd      = tick() + RECORD_DELAY
-				isReplaying         = false
-				jumpTriggered       = false
+				replayIndex = 1
+				recordDelayEnd = tick() + RECORD_DELAY
+				isReplaying = false
+				jumpTriggered = false
 				resetFallbackState()
 			end
 
 			if recordDelayEnd then
 				if tick() >= recordDelayEnd then
 					recordDelayEnd = nil
-					isReplaying    = true
-					replayIndex    = 1
-					jumpTriggered  = false
+					isReplaying = true
+					replayIndex = 1
+					jumpTriggered = false
 				else
 					smoothMove(humanoid, rootPart.Position)
 					lastWasInside = isInside
@@ -668,12 +700,12 @@ local function startFollowing()
 					if recordedJumpIndices[replayIndex] and not jumpTriggered then
 						humanoid.Jump = true
 						jumpTriggered = true
-						stuckTimer    = -1.0
+						stuckTimer = -1.0
 					elseif jumpTriggered then
 						if humanoid.FloorMaterial == Enum.Material.Air then
 							humanoid.Jump = false
 							jumpTriggered = false
-							stuckTimer    = 0
+							stuckTimer = 0
 						end
 					elseif not recordedJumpIndices[replayIndex] then
 						jumpTriggered = false
@@ -736,7 +768,7 @@ local function startFollowing()
 			end
 		end
 
-		-- FALLBACK PATHFINDING (with stutter fixes)
+		-- FALLBACK PATHFINDING (with manual override and anti‑stutter)
 		if recordedMode and fallbackActive then
 			if distance <= STOP_DISTANCE then
 				local nearestIdx = findNearestWaypointIndex(rootPart.Position)
@@ -757,7 +789,7 @@ local function startFollowing()
 				return
 			end
 
-			-- Short distance -> direct move (no pathfinding stutter)
+			-- Short distance -> direct move (no pathfinding)
 			if distance < DIRECT_MOVE_DISTANCE then
 				if isSafePosition(targetRoot.Position) then
 					fallbackSmoothMove(humanoid, targetRoot.Position)
@@ -769,16 +801,18 @@ local function startFollowing()
 				return
 			end
 
-			-- Path recompute with debounce
+			-- Path recompute with debounce (skip if manual control active)
 			local needRecompute = false
-			if not fallbackPath then
-				needRecompute = true
-			elseif fallbackWaypointIndex > #fallbackPath:GetWaypoints() then
-				needRecompute = true
-			elseif fallbackLastPathTarget then
-				local targetDrift = (targetRoot.Position - fallbackLastPathTarget).Magnitude
-				if targetDrift > 5 and (now - fallbackLastPathUpdate) >= FALLBACK_PATH_UPDATE_INTERVAL then
+			if not manualControlActive then
+				if not fallbackPath then
 					needRecompute = true
+				elseif fallbackWaypointIndex > #fallbackPath:GetWaypoints() then
+					needRecompute = true
+				elseif fallbackLastPathTarget then
+					local targetDrift = (targetRoot.Position - fallbackLastPathTarget).Magnitude
+					if targetDrift > 5 and (now - fallbackLastPathUpdate) >= FALLBACK_PATH_UPDATE_INTERVAL then
+						needRecompute = true
+					end
 				end
 			end
 
@@ -809,7 +843,7 @@ local function startFollowing()
 				end
 			end
 
-			if fallbackPath then
+			if fallbackPath and not manualControlActive then
 				local waypoints = fallbackPath:GetWaypoints()
 				while fallbackWaypointIndex <= #waypoints do
 					local wp = waypoints[fallbackWaypointIndex]
@@ -836,7 +870,7 @@ local function startFollowing()
 				else
 					fallbackPath = nil
 				end
-			else
+			elseif not manualControlActive then
 				-- No path: move directly if safe
 				if isSafePosition(targetRoot.Position) then
 					fallbackSmoothMove(humanoid, targetRoot.Position)
@@ -850,74 +884,76 @@ local function startFollowing()
 			return
 		end
 
-		-- NORMAL FOLLOWING (non-recorded mode)
-		local recompute = false
-		if not currentPath then
-			recompute = true
-		elseif not lastPathTarget or (targetRoot.Position - lastPathTarget).Magnitude > 5 then
-			recompute = true
-		elseif now - lastPathUpdate >= PATH_UPDATE_INTERVAL then
-			recompute = true
-		end
+		-- NORMAL FOLLOWING (non-recorded mode, with manual override)
+		if not manualControlActive then
+			local recompute = false
+			if not currentPath then
+				recompute = true
+			elseif not lastPathTarget or (targetRoot.Position - lastPathTarget).Magnitude > 5 then
+				recompute = true
+			elseif now - lastPathUpdate >= PATH_UPDATE_INTERVAL then
+				recompute = true
+			end
 
-		if recompute then
-			lastPathUpdate = now
-			if isSafePosition(targetRoot.Position) then
-				local path = PathfindingService:CreatePath({
-					AgentRadius = 2,
-					AgentHeight = 5,
-					AgentCanJump = true,
-					AgentJumpHeight = 7.5,
-					AgentMaxSlope = 45,
-					WaypointSpacing = 4,
-				})
-				local success = pcall(function()
-					path:ComputeAsync(rootPart.Position, targetRoot.Position)
-				end)
-				if success and path.Status == Enum.PathStatus.Success then
-					currentPath = path
-					currentWaypointIndex = 1
-					lastPathTarget = targetRoot.Position
+			if recompute then
+				lastPathUpdate = now
+				if isSafePosition(targetRoot.Position) then
+					local path = PathfindingService:CreatePath({
+						AgentRadius = 2,
+						AgentHeight = 5,
+						AgentCanJump = true,
+						AgentJumpHeight = 7.5,
+						AgentMaxSlope = 45,
+						WaypointSpacing = 4,
+					})
+					local success = pcall(function()
+						path:ComputeAsync(rootPart.Position, targetRoot.Position)
+					end)
+					if success and path.Status == Enum.PathStatus.Success then
+						currentPath = path
+						currentWaypointIndex = 1
+						lastPathTarget = targetRoot.Position
+					else
+						currentPath = nil
+					end
+				else
+					currentPath = nil
+				end
+			end
+
+			if distance < DIRECT_MOVE_DISTANCE then
+				currentPath = nil
+				if isSafePosition(targetRoot.Position) then
+					smoothMove(humanoid, targetRoot.Position)
+				else
+					smoothMove(humanoid, rootPart.Position)
+				end
+			elseif currentPath then
+				local waypoints = currentPath:GetWaypoints()
+				if currentWaypointIndex <= #waypoints then
+					local waypoint = waypoints[currentWaypointIndex]
+					if isSafePosition(waypoint.Position) then
+						smoothMove(humanoid, waypoint.Position)
+					else
+						currentPath = nil
+					end
+					if waypoint.Action == Enum.PathWaypointAction.Jump then
+						humanoid.Jump = true
+					else
+						humanoid.Jump = false
+					end
+					if (rootPart.Position - waypoint.Position).Magnitude < WAYPOINT_RADIUS then
+						currentWaypointIndex = currentWaypointIndex + 1
+					end
 				else
 					currentPath = nil
 				end
 			else
-				currentPath = nil
-			end
-		end
-
-		if distance < DIRECT_MOVE_DISTANCE then
-			currentPath = nil
-			if isSafePosition(targetRoot.Position) then
-				smoothMove(humanoid, targetRoot.Position)
-			else
-				smoothMove(humanoid, rootPart.Position)
-			end
-		elseif currentPath then
-			local waypoints = currentPath:GetWaypoints()
-			if currentWaypointIndex <= #waypoints then
-				local waypoint = waypoints[currentWaypointIndex]
-				if isSafePosition(waypoint.Position) then
-					smoothMove(humanoid, waypoint.Position)
+				if isSafePosition(targetRoot.Position) then
+					smoothMove(humanoid, targetRoot.Position)
 				else
-					currentPath = nil
+					smoothMove(humanoid, rootPart.Position)
 				end
-				if waypoint.Action == Enum.PathWaypointAction.Jump then
-					humanoid.Jump = true
-				else
-					humanoid.Jump = false
-				end
-				if (rootPart.Position - waypoint.Position).Magnitude < WAYPOINT_RADIUS then
-					currentWaypointIndex = currentWaypointIndex + 1
-				end
-			else
-				currentPath = nil
-			end
-		else
-			if isSafePosition(targetRoot.Position) then
-				smoothMove(humanoid, targetRoot.Position)
-			else
-				smoothMove(humanoid, rootPart.Position)
 			end
 		end
 
@@ -932,7 +968,7 @@ end
 FollowButton.MouseButton1Click:Connect(function()
 	local searchText = SearchBar.Text
 	if searchText == "" then
-		Status.Text      = "Enter a name"
+		Status.Text = "Enter a name"
 		Status.TextColor3 = Color3.fromRGB(255, 200, 100)
 		return
 	end
@@ -940,21 +976,21 @@ FollowButton.MouseButton1Click:Connect(function()
 	if found then
 		stopFollowing()
 		targetPlayer = found
-		isFollowing  = true
+		isFollowing = true
 		startFollowing()
-		Status.Text      = "Following " .. found.DisplayName
+		Status.Text = "Following " .. found.DisplayName
 		Status.TextColor3 = Color3.fromRGB(100, 200, 255)
-		SearchBar.Text   = found.Name
+		SearchBar.Text = found.Name
 	else
-		Status.Text      = "Not found"
+		Status.Text = "Not found"
 		Status.TextColor3 = Color3.fromRGB(255, 100, 100)
 	end
 end)
 
 CancelButton.MouseButton1Click:Connect(function()
 	stopFollowing()
-	SearchBar.Text   = ""
-	Status.Text      = "Ready"
+	SearchBar.Text = ""
+	Status.Text = "Ready"
 	Status.TextColor3 = Color3.fromRGB(200, 200, 200)
 end)
 
