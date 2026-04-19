@@ -3,6 +3,11 @@
 -- ADDED: Silly Behavior triggers after 10s of victim standing still
 -- FIXED: Proper 4/8 stud hysteresis with original following preserved
 -- FIXED: Compressed format playback (data[1] = position, data[2] = jump)
+-- FIXED: Timer only counts inside 8 studs
+-- FIXED: Seated victim detection - timer continues when seated
+-- FIXED: Anti-void works on R6 and R15
+-- FIXED: Recorded Mode reset loop - only resets once per exit
+-- ALL 5 MVs INCLUDED (MV = Movement)
 
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
@@ -20,7 +25,7 @@ end
 print("=== Follower Script Starting ===")
 
 -- ══════════════════════════════════════════════
---              RECORDED SEQUENCES 
+--              RECORDED MOVEMENTS (MVs)
 -- ══════════════════════════════════════════════
 local V3 = Vector3.new
 local SILLY_SEQUENCES = {
@@ -468,7 +473,7 @@ local function checkManualMovement()
 end
 
 -- ══════════════════════════════════════════════
---  Anti-void
+--  Anti-void (R6 + R15 COMPATIBLE)
 -- ══════════════════════════════════════════════
 local CACHE_GRID = 2
 local function cacheKey(pos)
@@ -483,6 +488,11 @@ local function makeRaycastParams()
 		local char = plr.Character
 		if char then
 			table.insert(ignoreList, char)
+			for _, child in ipairs(char:GetDescendants()) do
+				if child:IsA("BasePart") then
+					table.insert(ignoreList, child)
+				end
+			end
 		end
 	end
 	params.FilterDescendantsInstances = ignoreList
@@ -547,15 +557,16 @@ local function getSidePosition(targetRoot, side)
 	return targetRoot.Position
 end
 
-local function isSeated(humanoid)
-	return humanoid and humanoid.SeatPart ~= nil
-end
-
 local function isFollowerSeated()
 	local char = player.Character
 	if not char then return false end
 	local hum = char:FindFirstChild("Humanoid")
-	return hum and hum.SeatPart ~= nil
+	return hum and (hum.Sit or hum.SeatPart ~= nil)
+end
+
+local function isVictimSeated(targetHumanoid)
+	if not targetHumanoid then return false end
+	return targetHumanoid.Sit or (targetHumanoid.SeatPart ~= nil)
 end
 
 local function resetFallbackState()
@@ -735,6 +746,9 @@ local function startFollowing()
 	local currentPath = nil
 	local currentWaypointIndex = 0
 	local lastPathTarget = nil
+	
+	local debugPrintedExit = false
+	local debugPrintedRecorded = false
 
 	victimIsMoving = false
 	victimStillTimer = 0
@@ -776,17 +790,14 @@ local function startFollowing()
 		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not rootPart or not targetRoot then return end
 
-		local followerSeated = isSeated(humanoid)
-		local targetSeated = targetHumanoid and isSeated(targetHumanoid)
+		local followerSeated = isFollowerSeated()
+		local targetSeated = isVictimSeated(targetHumanoid)
+		
 		if followerSeated and not targetSeated then
 			humanoid.Sit = false
-			local now = tick()
-			if now - lastSeatExitTime > 1.0 then
-				humanoid.Jump = true
-				lastSeatExitTime = now
-				Status.Text = "Jumping off seat"
-			end
-			smoothMove(humanoid, rootPart.Position)
+			humanoid.Jump = true
+			print("[ANTI-SEAT] Forcing exit from seat")
+			Status.Text = "Getting off seat"
 		end
 
 		local distance = (targetRoot.Position - rootPart.Position).Magnitude
@@ -794,18 +805,26 @@ local function startFollowing()
 
 		if distance > EXIT_DISTANCE and previousDistance <= EXIT_DISTANCE then
 			print("[RADIUS] EXITED 8 stud radius - Distance: " .. math.floor(distance) .. " studs")
+			debugPrintedExit = false
+			debugPrintedRecorded = false
 		elseif distance <= ENTER_DISTANCE and previousDistance > ENTER_DISTANCE then
 			print("[RADIUS] ENTERED 4 stud radius - Distance: " .. math.floor(distance) .. " studs")
+			debugPrintedExit = false
+			debugPrintedRecorded = false
 		end
 		previousDistance = distance
 
 		local wasMoving = victimIsMoving
 		if targetHumanoid then
-			local moveDir = targetHumanoid.MoveDirection.Magnitude
-			local vel = targetRoot.AssemblyLinearVelocity.Magnitude
-			victimIsMoving = (moveDir > 0.5) or (vel > 2)
-			if wasMoving ~= victimIsMoving then
-				print("[VICTIM]", victimIsMoving and "Started moving" or "Stopped moving")
+			if isVictimSeated(targetHumanoid) then
+				victimIsMoving = false
+			else
+				local moveDir = targetHumanoid.MoveDirection.Magnitude
+				local vel = targetRoot.AssemblyLinearVelocity.Magnitude
+				victimIsMoving = (moveDir > 0.5) or (vel > 2)
+				if wasMoving ~= victimIsMoving then
+					print("[VICTIM]", victimIsMoving and "Started moving" or "Stopped moving")
+				end
 			end
 			if victimIsMoving then
 				victimHasMovedSinceStart = true
@@ -838,7 +857,7 @@ local function startFollowing()
 		end
 
 		if not sillyActive and not isFollowerSeated() and SILLY_ENABLED and now >= sillyCooldownEnd then
-			if not victimIsMoving and distance < MAX_SILLY_DISTANCE then
+			if not victimIsMoving and distance <= EXIT_DISTANCE and distance < MAX_SILLY_DISTANCE then
 				victimStillTimer = victimStillTimer + deltaTime
 				if math.floor(victimStillTimer) > math.floor(victimStillTimer - deltaTime) then
 					print("[TIMER] Still:", math.floor(victimStillTimer), "/", VICTIM_STILL_TIME)
@@ -846,7 +865,7 @@ local function startFollowing()
 				if victimStillTimer >= VICTIM_STILL_TIME then
 					currentSillySequence, seqIndex = pickRandomSillySequence()
 					if currentSillySequence then
-						print("[SILLY] TRIGGERED! Playing sequence #" .. seqIndex)
+						print("[SILLY] TRIGGERED! Playing Movement #" .. seqIndex)
 						sillyActive = true
 						sillyIndex = 1
 						sillyJumped = false
@@ -854,13 +873,13 @@ local function startFollowing()
 						sillyCooldownEnd = now + SILLY_COOLDOWN_TIME
 						inSideStand = false
 					else
-						print("[SILLY] No sequences available!")
+						print("[SILLY] No movements available!")
 						victimStillTimer = 0
 					end
 				end
 			else
 				if victimStillTimer > 0.5 then
-					print("[TIMER] Reset - " .. (victimIsMoving and "moved" or "too far"))
+					print("[TIMER] Reset - " .. (victimIsMoving and "moved" or "outside 8 studs"))
 				end
 				victimStillTimer = 0
 			end
@@ -947,10 +966,33 @@ local function startFollowing()
 			return
 		end
 
+		-- ===== CHASE WHEN OUTSIDE 8 STUDS =====
 		if distance > EXIT_DISTANCE then
+			if not debugPrintedExit then
+				print("[DEBUG] === EXITED 8 STUDS ===")
+				print("[DEBUG] recordedMode =", recordedMode)
+				print("[DEBUG] isReplaying =", isReplaying)
+				print("[DEBUG] recordDelayEnd =", recordDelayEnd ~= nil)
+				debugPrintedExit = true
+			end
+			
+			if not manualControlActive then
+				smoothMove(humanoid, targetRoot.Position)
+			end
+			
 			if recordedMode then
+				if not debugPrintedRecorded then
+					print("[DEBUG] Inside recorded block")
+					print("[DEBUG] fallbackActive =", fallbackActive)
+					print("[DEBUG] inSideStand =", inSideStand)
+					debugPrintedRecorded = true
+				end
+				
 				local targetMoved = lastPathTarget and (targetRoot.Position - lastPathTarget).Magnitude < 20
-				if not fallbackActive and not inSideStand and targetMoved then
+				local justExited = previousDistance <= EXIT_DISTANCE
+				
+				if not fallbackActive and not inSideStand and targetMoved and justExited then
+					print("[DEBUG] Resetting recorded positions (once)")
 					recordedPositions = {}
 					recordedJumpIndices = {}
 					replayIndex = 1
@@ -962,6 +1004,7 @@ local function startFollowing()
 
 				if recordDelayEnd then
 					if tick() >= recordDelayEnd then
+						print("[DEBUG] recordDelayEnd finished, isReplaying = true")
 						recordDelayEnd = nil
 						isReplaying = true
 						replayIndex = 1
@@ -1283,4 +1326,4 @@ player.CharacterAdded:Connect(function()
 end)
 
 print("=== Follower Script Ready ===")
-print("[SILLY] Loaded " .. #SILLY_SEQUENCES .. " silly sequences")
+print("[SILLY] Loaded " .. #SILLY_SEQUENCES .. " movements (MVs)")
