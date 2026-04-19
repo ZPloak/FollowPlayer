@@ -1,8 +1,5 @@
--- Advanced Follower GUI (Executor‑Optimized + Jump Fix + Smooth Fallback + Anti‑Void)
--- FIXES:
---   1. Anti‑void works on R6 & R15 (raycast ignores all player characters).
---   2. Manual movement override – script stops interfering when you move.
---   3. Stutter eliminated – MoveTo throttling + path recompute debounce + manual control detection.
+-- Advanced Follower GUI (Executor-Optimized + Smooth Movement + Anti-Void)
+-- FIXED: Removed movement throttle - NO MORE STUTTER
 
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
@@ -13,7 +10,7 @@ local Workspace = game:GetService("Workspace")
 
 local PlayerGui = player:WaitForChild("PlayerGui", 5)
 if not PlayerGui then
-	warn("PlayerGui not found – aborting")
+	warn("PlayerGui not found - aborting")
 	return
 end
 
@@ -21,8 +18,8 @@ end
 --  Settings
 -- ══════════════════════════════════════════════
 local STOP_DISTANCE               = 8
-local PATH_UPDATE_INTERVAL        = 0.5
-local FALLBACK_PATH_UPDATE_INTERVAL = 0.4
+local PATH_UPDATE_INTERVAL        = 0.3
+local FALLBACK_PATH_UPDATE_INTERVAL = 0.3
 local SIDE_DISTANCE               = 4
 local RECORD_DELAY                = 0.3
 local STUCK_TIMEOUT               = 2
@@ -32,17 +29,16 @@ local WAYPOINT_RADIUS             = 8
 local REPLAY_ADVANCE_RADIUS       = 7
 local FALLBACK_MOVE_TOLERANCE     = 0.05
 local DIRECT_MOVE_DISTANCE        = 15
-local MOVETO_THROTTLE             = 0.1
-local MANUAL_CONTROL_COOLDOWN     = 0.5   -- seconds after input stops before resuming
+local MANUAL_CONTROL_COOLDOWN     = 0.5
 
--- Anti‑void
+-- Anti-void
 local USE_SAFETY_RAYCAST          = true
-local SAFE_GROUND_MAX_DROP        = 50    -- increased for R6
+local SAFE_GROUND_MAX_DROP        = 50
 local SAFE_RAYCAST_CACHE_TIME     = 0.15
 local safetyCache                 = {}
 
 -- ══════════════════════════════════════════════
---  GUI (same as before, but kept minimal)
+--  GUI
 -- ══════════════════════════════════════════════
 local oldGui = PlayerGui:FindFirstChild("AdvancedFollowGui")
 if oldGui then oldGui:Destroy() end
@@ -208,7 +204,7 @@ AutoSwitchButton.Size = UDim2.new(1, -24, 0, 32)
 AutoSwitchButton.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
 AutoSwitchButton.BorderSizePixel = 0
 AutoSwitchButton.Font = Enum.Font.GothamBold
-AutoSwitchButton.Text = "Auto‑Switcher: ON"
+AutoSwitchButton.Text = "Auto-Switcher: ON"
 AutoSwitchButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 AutoSwitchButton.TextSize = 12
 AutoSwitchButton.AutoButtonColor = false
@@ -267,7 +263,6 @@ local fallbackWaypointIndex = 1
 local fallbackLastPathUpdate = 0
 local fallbackLastPathTarget = nil
 local fallbackLastMoveTarget = nil
-local lastMoveCallTime = 0
 local lastMoveTargetPos = nil
 
 local lastSeatExitTime = 0
@@ -276,19 +271,18 @@ local lastStatusUpdate = 0
 -- Manual movement override
 local manualControlActive = false
 local lastInputTime = 0
+
 local function checkManualMovement()
 	local char = player.Character
 	if not char then return false end
 	local hum = char:FindFirstChild("Humanoid")
 	if not hum then return false end
-	-- If MoveDirection length > 0.5, player is actively moving
 	local moving = hum.MoveDirection.Magnitude > 0.5
 	if moving then
 		manualControlActive = true
 		lastInputTime = tick()
 		return true
 	else
-		-- If no input for cooldown period, release manual control
 		if manualControlActive and (tick() - lastInputTime) > MANUAL_CONTROL_COOLDOWN then
 			manualControlActive = false
 		end
@@ -297,7 +291,7 @@ local function checkManualMovement()
 end
 
 -- ══════════════════════════════════════════════
---  Anti‑void: raycast ignores all players (works on R6/R15)
+--  Anti-void
 -- ══════════════════════════════════════════════
 local CACHE_GRID = 2
 local function cacheKey(pos)
@@ -308,7 +302,6 @@ local function makeRaycastParams()
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	local ignoreList = {}
-	-- Exclude every player's character and all their descendants
 	for _, plr in ipairs(Players:GetPlayers()) do
 		local char = plr.Character
 		if char then
@@ -328,11 +321,9 @@ local function isSafePosition(pos)
 	if cached and (now - cached.t) < SAFE_RAYCAST_CACHE_TIME then
 		return cached.safe
 	end
-	-- Start slightly above the position to avoid self-hit when standing
 	local origin = Vector3.new(pos.X, pos.Y + 3, pos.Z)
 	local direction = Vector3.new(0, -(SAFE_GROUND_MAX_DROP + 3), 0)
 	local result = Workspace:Raycast(origin, direction, makeRaycastParams())
-	-- If we hit something, it's safe ground (not a player)
 	local safe = result ~= nil
 	safetyCache[key] = { safe = safe, t = now }
 	return safe
@@ -349,34 +340,17 @@ local function pruneSafetyCache()
 end
 
 -- ══════════════════════════════════════════════
---  Throttled MoveTo (with manual override)
+--  Smooth MoveTo (NO THROTTLE - FIXED)
 -- ══════════════════════════════════════════════
-local function throttledMoveTo(humanoid, targetPos, isFallback)
-	if not humanoid or not targetPos then return end
-	-- If manual control is active, do NOT override the player's movement
-	if manualControlActive then
-		return
-	end
-	local now = tick()
-	if lastMoveCallTime and (now - lastMoveCallTime) < MOVETO_THROTTLE then
-		if lastMoveTargetPos and (targetPos - lastMoveTargetPos).Magnitude < 1.5 then
-			return
-		end
-	end
-	lastMoveCallTime = now
-	lastMoveTargetPos = targetPos
-	if isFallback then
-		fallbackLastMoveTarget = targetPos
-	end
-	pcall(function() humanoid:MoveTo(targetPos) end)
-end
-
 local function smoothMove(humanoid, targetPos)
-	throttledMoveTo(humanoid, targetPos, false)
-end
+	if not humanoid or not targetPos then return end
+	if manualControlActive then return end
 
-local function fallbackSmoothMove(humanoid, targetPos)
-	throttledMoveTo(humanoid, targetPos, true)
+	-- NO THROTTLE - Always send move command for smooth movement
+	lastMoveTargetPos = targetPos
+	pcall(function() 
+		humanoid:MoveTo(targetPos) 
+	end)
 end
 
 -- ══════════════════════════════════════════════
@@ -411,7 +385,6 @@ end
 local function resetFallbackState()
 	fallbackActive = false
 	fallbackPath = nil
-	fallbackTarget = nil
 	fallbackLastPathUpdate = 0
 	fallbackLastPathTarget = nil
 	fallbackLastMoveTarget = nil
@@ -431,7 +404,6 @@ local function stopFollowing()
 	isReplaying = false
 	jumpTriggered = false
 	resetFallbackState()
-	lastMoveCallTime = 0
 	lastMoveTargetPos = nil
 	manualControlActive = false
 
@@ -527,7 +499,7 @@ end
 
 local function toggleAutoSwitch()
 	autoSwitchEnabled = not autoSwitchEnabled
-	AutoSwitchButton.Text = autoSwitchEnabled and "Auto‑Switcher: ON" or "Auto‑Switcher: OFF"
+	AutoSwitchButton.Text = autoSwitchEnabled and "Auto-Switcher: ON" or "Auto-Switcher: OFF"
 	if not autoSwitchEnabled then
 		resetFallbackState()
 	end
@@ -548,7 +520,7 @@ local function findNearestWaypointIndex(pos)
 end
 
 -- ══════════════════════════════════════════════
---  Main follow loop (with manual override and anti‑stutter)
+--  Main follow loop
 -- ══════════════════════════════════════════════
 local function startFollowing()
 	if followConnection then followConnection:Disconnect() end
@@ -562,7 +534,7 @@ local function startFollowing()
 
 	followConnection = RunService.RenderStepped:Connect(function(deltaTime)
 		pruneSafetyCache()
-		checkManualMovement() -- updates manualControlActive
+		checkManualMovement()
 
 		if not isFollowing or not targetPlayer or not targetPlayer.Parent then
 			if targetPlayer and not targetPlayer.Parent then
@@ -582,7 +554,7 @@ local function startFollowing()
 		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not rootPart or not targetRoot then return end
 
-		-- Anti‑seat
+		-- Anti-seat
 		local followerSeated = isSeated(humanoid)
 		local targetSeated = targetHumanoid and isSeated(targetHumanoid)
 		if followerSeated and not targetSeated then
@@ -600,7 +572,7 @@ local function startFollowing()
 		local isInside = distance <= STOP_DISTANCE
 		local now = tick()
 
-		-- Status
+		-- Status update
 		if now - lastStatusUpdate > 0.2 then
 			lastStatusUpdate = now
 			local mode = ""
@@ -615,7 +587,7 @@ local function startFollowing()
 			Status.TextColor3 = recordedMode and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(100, 200, 255)
 		end
 
-		-- Side‑stand when inside stop radius
+		-- Side-stand when inside stop radius
 		if isInside then
 			if recordedMode then
 				recordDelayEnd = nil
@@ -745,7 +717,7 @@ local function startFollowing()
 										fallbackLastPathTarget = nil
 										fallbackWaypointIndex = 1
 										stuckTimer = 0
-										Status.Text = "Stuck – using pathfinding"
+										Status.Text = "Stuck - using pathfinding"
 									end
 								elseif stuckTimer < 0 then
 									stuckTimer = math.min(stuckTimer + deltaTime, 0)
@@ -768,7 +740,7 @@ local function startFollowing()
 			end
 		end
 
-		-- FALLBACK PATHFINDING (with manual override and anti‑stutter)
+		-- FALLBACK PATHFINDING
 		if recordedMode and fallbackActive then
 			if distance <= STOP_DISTANCE then
 				local nearestIdx = findNearestWaypointIndex(rootPart.Position)
@@ -781,27 +753,24 @@ local function startFollowing()
 				return
 			end
 
-			-- If target is over void, stay put
 			if not isSafePosition(targetRoot.Position) then
-				fallbackSmoothMove(humanoid, rootPart.Position)
+				smoothMove(humanoid, rootPart.Position)
 				lastWasInside = isInside
 				lastTargetPos = targetRoot.Position
 				return
 			end
 
-			-- Short distance -> direct move (no pathfinding)
 			if distance < DIRECT_MOVE_DISTANCE then
 				if isSafePosition(targetRoot.Position) then
-					fallbackSmoothMove(humanoid, targetRoot.Position)
+					smoothMove(humanoid, targetRoot.Position)
 				else
-					fallbackSmoothMove(humanoid, rootPart.Position)
+					smoothMove(humanoid, rootPart.Position)
 				end
 				lastWasInside = isInside
 				lastTargetPos = targetRoot.Position
 				return
 			end
 
-			-- Path recompute with debounce (skip if manual control active)
 			local needRecompute = false
 			if not manualControlActive then
 				if not fallbackPath then
@@ -862,7 +831,7 @@ local function startFollowing()
 							fallbackPath = nil
 						end
 					else
-						fallbackSmoothMove(humanoid, wp.Position)
+						smoothMove(humanoid, wp.Position)
 						if wp.Action == Enum.PathWaypointAction.Jump then
 							humanoid.Jump = true
 						end
@@ -871,11 +840,10 @@ local function startFollowing()
 					fallbackPath = nil
 				end
 			elseif not manualControlActive then
-				-- No path: move directly if safe
 				if isSafePosition(targetRoot.Position) then
-					fallbackSmoothMove(humanoid, targetRoot.Position)
+					smoothMove(humanoid, targetRoot.Position)
 				else
-					fallbackSmoothMove(humanoid, rootPart.Position)
+					smoothMove(humanoid, rootPart.Position)
 				end
 			end
 
@@ -884,7 +852,7 @@ local function startFollowing()
 			return
 		end
 
-		-- NORMAL FOLLOWING (non-recorded mode, with manual override)
+		-- NORMAL FOLLOWING
 		if not manualControlActive then
 			local recompute = false
 			if not currentPath then
@@ -996,3 +964,12 @@ end)
 
 RecordButton.MouseButton1Click:Connect(toggleRecordedMode)
 AutoSwitchButton.MouseButton1Click:Connect(toggleAutoSwitch)
+
+player.CharacterAdded:Connect(function()
+	if isFollowing then
+		wasInRadius = false
+		sideReached = false
+		currentSide = nil
+		resetFallbackState()
+	end
+end)
