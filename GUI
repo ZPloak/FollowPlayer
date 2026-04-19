@@ -1,5 +1,8 @@
--- Advanced Follower GUI (Executor-Optimized + Smooth Movement + Anti-Void)
+-- Advanced Follower GUI (Executor-Optimized + Smooth Movement + Anti-Void + Silly Behavior)
 -- FIXED: Removed movement throttle - NO MORE STUTTER
+-- ADDED: Silly Behavior triggers after 10s of victim standing still
+-- FIXED: Proper 4/8 stud hysteresis with original following preserved
+-- FIXED: Compressed format playback (data[1] = position, data[2] = jump)
 
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
@@ -14,28 +17,175 @@ if not PlayerGui then
 	return
 end
 
+print("=== Follower Script Starting ===")
+
+-- ══════════════════════════════════════════════
+--              RECORDED SEQUENCES 
+-- ══════════════════════════════════════════════
+local V3 = Vector3.new
+local SILLY_SEQUENCES = {
+	-- MV1
+	{
+		{V3(0.23,-0.34,3.52), false}, {V3(0.23,-0.34,3.52), false}, {V3(0.23,-0.34,3.52), false},
+		{V3(0.23,-0.34,3.52), false}, {V3(0.23,-0.34,3.52), false}, {V3(0.23,-0.34,3.52), false},
+		{V3(0.23,3.75,3.48), true}, {V3(0.19,6.39,2.38), true}, {V3(0.17,6.85,0.75), false},
+		{V3(0.17,4.95,0.45), false}, {V3(0.17,3.64,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false},
+		{V3(0.17,3.70,0.45), false}, {V3(0.17,3.70,0.45), false}
+	},
+	-- MV2
+	{
+		{V3(8.17,-0.33,2.06), false}, {V3(8.17,-0.33,2.06), false}, {V3(8.17,-0.33,2.06), false},
+		{V3(7.81,-0.33,1.40), false}, {V3(7.05,-0.33,-0.01), false}, {V3(6.29,-0.33,-1.42), false},
+		{V3(5.36,-0.33,-3.04), false}, {V3(3.98,-0.33,-3.66), false}, {V3(2.17,-0.33,-4.11), false},
+		{V3(0.49,-0.33,-4.53), false}, {V3(-1.06,-0.33,-4.91), false}, {V3(-2.71,-0.33,-5.04), false},
+		{V3(-4.20,-0.33,-4.47), false}, {V3(-5.87,-0.33,-3.99), false}, {V3(-6.84,-0.33,-2.83), false},
+		{V3(-6.77,-0.33,-1.21), false}, {V3(-6.30,-0.33,0.46), false}, {V3(-5.83,-0.33,2.13), false},
+		{V3(-5.42,-0.33,3.68), false}, {V3(-5.06,-0.33,5.24), false}, {V3(-4.70,-0.33,6.93), false},
+		{V3(-3.86,-0.33,8.31), false}, {V3(-2.46,-0.33,9.32), false}, {V3(-1.14,-0.33,10.21), false},
+		{V3(0.55,-0.33,9.91), false}, {V3(2.20,-0.33,9.39), false}, {V3(3.54,-0.33,8.52), false},
+		{V3(4.63,-0.33,7.36), false}, {V3(5.60,-0.33,5.92), false}, {V3(6.42,-0.33,4.39), false},
+		{V3(7.12,-0.33,2.96), false}, {V3(7.71,-0.33,1.47), false}, {V3(8.22,-0.33,-0.19), false},
+		{V3(8.46,-0.33,-1.90), false}, {V3(8.22,-0.33,-3.60), false}, {V3(7.18,-0.33,-5.13), false},
+		{V3(5.71,-0.33,-6.05), false}, {V3(4.24,-0.33,-6.68), false}, {V3(2.56,-0.33,-7.07), false},
+		{V3(0.83,-0.33,-7.13), false}, {V3(-0.89,-0.33,-6.89), false}, {V3(-2.41,-0.33,-6.41), false},
+		{V3(-3.96,-0.33,-5.64), false}, {V3(-5.26,-0.33,-4.70), false}, {V3(-6.51,-0.33,-3.51), false},
+		{V3(-7.37,-0.33,-2.32), false}, {V3(-7.33,-0.33,-0.75), false}, {V3(-6.55,-0.33,0.80), false},
+		{V3(-5.42,-0.33,2.11), false}, {V3(-4.01,-0.33,3.10), false}, {V3(-2.52,-0.33,3.69), false},
+		{V3(-0.86,-0.33,4.19), false}, {V3(0.84,-0.33,4.51), false}, {V3(2.57,-0.33,4.57), false},
+		{V3(4.15,-0.33,4.34), false}, {V3(5.50,-0.33,3.49), false}, {V3(6.19,-0.33,2.05), false},
+		{V3(6.69,-0.33,0.53), false}, {V3(6.55,-0.33,-1.08), false}, {V3(5.60,-0.33,-2.37), false},
+		{V3(4.57,-0.33,-3.76), false}, {V3(3.54,-0.33,-5.16), false}, {V3(2.45,-0.33,-6.45), false},
+		{V3(0.73,-0.33,-6.71), false}, {V3(-0.98,-0.33,-6.97), false}, {V3(-2.56,-0.33,-7.21), false},
+		{V3(-4.14,-0.33,-7.44), false}, {V3(-5.55,-0.33,-6.98), false}, {V3(-6.84,-0.33,-6.03), false},
+		{V3(-8.23,-0.33,-5.00), false}, {V3(-8.55,-0.33,-3.46), false}, {V3(-8.81,-0.33,-1.75), false},
+		{V3(-9.06,-0.33,-0.03), false}, {V3(-9.32,-0.33,1.68), false}, {V3(-8.78,-0.33,3.19), false},
+		{V3(-7.58,-0.33,4.32), false}, {V3(-6.27,-0.33,5.00), false}, {V3(-5.24,-0.33,6.39), false},
+		{V3(-4.21,-0.33,7.79), false}, {V3(-2.70,-0.33,8.39), false}, {V3(-0.99,-0.33,8.64), false},
+		{V3(0.60,-0.33,8.88), false}, {V3(2.30,-0.33,9.10), false}, {V3(3.70,-0.33,8.10), false},
+		{V3(5.10,-0.33,7.07), false}, {V3(6.49,-0.33,6.04), false}, {V3(7.42,-0.33,4.87), false},
+		{V3(7.15,-0.33,3.42), false}, {V3(6.12,-0.33,2.02), false}, {V3(5.17,-0.33,0.74), false},
+		{V3(3.77,-0.33,-0.04), false}, {V3(3.46,-0.33,-0.08), false}, {V3(3.46,-0.33,-0.08), false},
+		{V3(3.46,-0.33,-0.08), false}
+	},
+	-- MV3
+	{
+		{V3(3.92,-0.33,-2.14), false}, {V3(3.92,-0.33,-2.14), false}, {V3(3.92,-0.33,-2.14), false},
+		{V3(3.81,-0.33,-2.76), false}, {V3(3.02,-0.33,-4.01), false}, {V3(1.72,-0.33,-4.94), false},
+		{V3(0.08,-0.33,-4.95), false}, {V3(-1.63,-0.33,-4.67), false}, {V3(-3.34,-0.33,-4.38), false},
+		{V3(-4.54,-0.33,-3.51), false}, {V3(-5.32,-0.33,-1.92), false}, {V3(-5.07,-0.33,-0.34), false},
+		{V3(-5.11,-0.33,1.38), false}, {V3(-5.37,-0.33,3.06), false}, {V3(-4.46,-0.33,4.53), false},
+		{V3(-3.37,-0.33,5.76), false}, {V3(-1.81,-0.33,6.18), false}, {V3(-1.79,-0.33,6.19), false},
+		{V3(-1.24,-0.33,4.87), true}, {V3(-0.59,4.32,3.27), true}, {V3(-0.09,6.67,1.61), true},
+		{V3(0.25,6.79,0.04), false}, {V3(0.51,4.83,-1.60), false}, {V3(0.75,0.75,-3.25), false},
+		{V3(0.99,-0.37,-4.97), false}, {V3(2.13,-0.34,-5.93), false}, {V3(3.72,-0.33,-5.72), false},
+		{V3(5.03,-0.33,-4.79), false}, {V3(5.56,-0.33,-3.26), false}, {V3(5.47,-0.33,-1.53), false},
+		{V3(5.38,-0.33,0.20), false}, {V3(5.07,-0.33,1.83), false}, {V3(3.83,-0.33,2.84), false},
+		{V3(2.38,-0.33,3.11), false}, {V3(2.20,-0.33,3.08), false}, {V3(2.40,-0.33,1.91), false},
+		{V3(2.66,-0.33,0.33), false}, {V3(3.57,-0.33,-0.92), false}, {V3(4.98,-0.33,-1.93), false},
+		{V3(6.41,-0.33,-2.83), false}, {V3(7.50,-0.33,-2.65), false}, {V3(6.06,-0.33,-2.89), false},
+		{V3(4.47,-0.33,-3.15), false}, {V3(4.41,-0.33,-3.16), false}, {V3(4.39,-0.33,-3.05), false},
+		{V3(4.13,-0.33,-1.48), false}, {V3(4.13,-0.33,-1.45), false}, {V3(4.13,-0.33,-1.45), false},
+		{V3(4.13,-0.33,-1.45), false}
+	},
+	-- MV4
+	{
+		{V3(4.51,-0.33,2.42), false}, {V3(4.51,-0.33,2.42), false}, {V3(4.51,-0.33,2.42), false},
+		{V3(4.51,-0.33,2.42), false}, {V3(4.51,-0.33,2.42), false}, {V3(4.51,-0.33,2.42), false},
+		{V3(4.44,-0.33,1.66), false}, {V3(4.30,-0.33,0.07), false}, {V3(4.14,-0.33,-1.66), false},
+		{V3(3.99,-0.33,-3.25), false}, {V3(3.65,-0.33,-4.74), false}, {V3(2.32,-0.33,-5.85), false},
+		{V3(0.77,-0.33,-6.27), false}, {V3(-0.95,-0.33,-6.11), false}, {V3(-2.48,-0.33,-5.58), false},
+		{V3(-3.51,-0.33,-4.35), false}, {V3(-4.11,-0.33,-2.85), false}, {V3(-4.37,-0.33,-1.13), false},
+		{V3(-4.80,-0.33,0.41), false}, {V3(-5.29,-0.33,2.07), false}, {V3(-5.71,-0.33,3.60), false},
+		{V3(-4.85,-0.33,5.24), false}, {V3(-3.62,-0.33,6.07), false}, {V3(-2.07,-0.33,6.45), false},
+		{V3(-0.48,-0.33,6.24), false}, {V3(1.00,-0.33,5.34), false}, {V3(2.35,-0.33,4.49), false},
+		{V3(3.72,2.10,3.42), true}, {V3(4.83,5.78,2.04), true}, {V3(4.64,6.98,0.47), false},
+		{V3(4.09,5.87,-1.08), false}, {V3(4.29,2.81,-2.67), false}, {V3(3.68,-0.59,-4.00), false},
+		{V3(2.47,-0.34,-5.14), false}, {V3(1.07,-0.33,-5.77), false}, {V3(-0.67,-0.33,-5.71), false},
+		{V3(-2.35,-0.33,-5.53), false}, {V3(-3.52,-0.33,-4.25), false}, {V3(-4.29,-0.33,-2.96), false},
+		{V3(-4.20,1.54,-1.30), false}, {V3(-4.11,5.18,0.30), true}, {V3(-3.85,6.88,1.88), true},
+		{V3(-2.73,6.51,2.98), false}, {V3(-1.48,4.05,4.09), false}, {V3(-0.77,-0.33,5.39), false},
+		{V3(-0.41,-0.35,6.91), false}, {V3(1.24,-0.33,6.79), false}, {V3(2.73,-0.33,6.04), false},
+		{V3(3.77,-0.33,4.66), false}, {V3(4.73,-0.33,3.39), false}, {V3(5.77,-0.33,2.00), false},
+		{V3(6.63,-0.33,0.67), false}, {V3(5.73,-0.33,-0.59), false}, {V3(4.28,0.11,-0.70), false},
+		{V3(2.58,4.58,-0.36), true}, {V3(1.06,6.67,0.13), true}, {V3(-0.59,6.71,0.67), false},
+		{V3(-2.17,4.58,1.19), false}, {V3(-3.75,0.33,1.72), false}, {V3(-5.07,-0.36,2.64), false},
+		{V3(-5.01,-0.33,4.19), false}, {V3(-4.42,-0.33,5.71), false}, {V3(-2.96,-0.33,6.52), false},
+		{V3(-1.65,-0.33,7.43), false}, {V3(-0.29,-0.33,8.38), false}, {V3(1.40,-0.33,8.19), false},
+		{V3(2.56,-0.33,6.91), false}, {V3(3.55,-0.33,5.83), false}, {V3(4.63,-0.33,4.70), false},
+		{V3(5.34,-0.33,3.87), false}, {V3(5.80,-0.33,3.67), false}, {V3(5.94,-0.33,2.02), false},
+		{V3(5.31,-0.33,0.54), false}, {V3(4.63,-0.33,-1.05), false}, {V3(4.01,-0.33,-2.52), false},
+		{V3(3.11,-0.33,-3.90), false}, {V3(1.50,-0.33,-4.54), false}, {V3(0.85,-0.33,-5.86), false},
+		{V3(0.85,-0.33,-5.86), false}, {V3(0.85,-0.33,-5.86), false}, {V3(0.85,-0.33,-5.86), false}
+	},
+	-- MV5
+	{
+		{V3(2.56,-0.34,-6.93), false}, {V3(4.27,-0.34,-6.69), false}, {V3(4.85,-0.34,-5.21), false},
+		{V3(4.66,-0.34,-3.62), false}, {V3(4.47,-0.34,-1.90), false}, {V3(4.34,-0.34,-0.30), false},
+		{V3(4.29,-0.34,1.43), false}, {V3(4.30,-0.34,3.03), false}, {V3(3.66,-0.34,4.50), false},
+		{V3(2.17,-0.34,5.09), false}, {V3(0.43,-0.34,5.08), false}, {V3(-1.30,-0.34,5.04), false},
+		{V3(-2.90,-0.34,4.95), false}, {V3(-4.61,-0.34,4.71), false}, {V3(-5.82,-0.34,3.73), false},
+		{V3(-6.11,-0.34,2.03), false}, {V3(-5.98,-0.34,0.30), false}, {V3(-6.57,-0.34,-1.25), false},
+		{V3(-6.03,-0.34,-2.90), false}, {V3(-6.13,-0.34,-4.47), false}, {V3(-5.65,-0.34,-5.84), false},
+		{V3(-3.94,-0.34,-6.01), false}, {V3(-2.26,-0.34,-6.45), false}, {V3(-0.61,-0.34,-6.47), false},
+		{V3(0.68,-0.34,-5.59), false}, {V3(2.13,-0.34,-4.72), false}, {V3(3.29,-0.34,-3.49), false},
+		{V3(3.73,-0.34,-1.95), false}, {V3(4.49,-0.34,-0.54), false}, {V3(4.29,-0.34,1.15), false},
+		{V3(4.04,-0.34,3.00), false}, {V3(3.80,-0.34,3.45), false}, {V3(3.80,0.53,3.45), false},
+		{V3(3.49,4.58,3.16), true}, {V3(2.26,6.78,1.96), true}, {V3(1.15,6.66,0.85), false},
+		{V3(0.72,4.45,0.40), false}, {V3(0.72,3.68,0.40), false}, {V3(0.72,3.70,0.40), false},
+		{V3(0.72,3.70,0.40), false}, {V3(0.72,3.70,0.40), false}, {V3(0.72,3.70,0.40), false},
+		{V3(0.72,3.70,0.40), false}, {V3(0.72,3.70,0.40), false}, {V3(0.72,3.70,0.40), false},
+		{V3(0.72,3.70,0.40), false}, {V3(0.28,3.70,0.30), false}, {V3(-1.42,3.70,-0.07), false},
+		{V3(-3.12,2.50,-0.41), false}, {V3(-3.86,-0.60,-0.56), false}, {V3(-3.86,-0.35,-0.56), false},
+		{V3(-4.09,-0.34,-0.61), false}, {V3(-5.72,-0.34,-0.65), false}, {V3(-6.41,-0.34,0.68), false},
+		{V3(-6.98,-0.34,2.32), false}, {V3(-7.56,-0.34,3.95), false}, {V3(-7.28,-0.34,5.42), false},
+		{V3(-6.60,-0.34,6.87), false}, {V3(-5.50,-0.34,8.03), false}, {V3(-3.98,-0.34,8.55), false},
+		{V3(-2.46,-0.34,9.04), false}, {V3(-0.92,-0.34,8.78), false}, {V3(-0.36,-0.34,7.39), false},
+		{V3(-0.10,-0.34,5.68), false}, {V3(0.06,-0.34,4.72), false}, {V3(0.06,-0.34,4.72), false},
+		{V3(0.06,2.28,4.72), true}, {V3(0.05,5.59,4.49), true}, {V3(0.05,6.96,2.98), true},
+		{V3(0.05,6.11,1.32), false}, {V3(0.06,3.34,0.17), false}, {V3(0.06,3.46,0.17), false},
+		{V3(0.06,3.47,0.17), false}, {V3(0.06,3.50,0.17), false}, {V3(0.06,3.52,0.17), false},
+		{V3(0.06,3.57,0.17), false}, {V3(0.06,3.63,0.17), false}, {V3(0.06,3.65,0.17), false},
+		{V3(0.06,3.65,0.17), false}, {V3(0.06,3.65,0.17), false}, {V3(0.06,3.65,0.17), false},
+		{V3(0.06,3.65,0.17), false}, {V3(0.06,3.65,0.17), false}, {V3(0.06,3.65,0.17), false},
+		{V3(0.06,3.65,0.17), false}, {V3(0.06,3.64,0.17), false}, {V3(0.06,3.53,0.17), false}
+	}
+}
+
 -- ══════════════════════════════════════════════
 --  Settings
 -- ══════════════════════════════════════════════
-local STOP_DISTANCE               = 8
-local PATH_UPDATE_INTERVAL        = 0.3
+local EXIT_DISTANCE                = 8
+local ENTER_DISTANCE               = 4
+local PATH_UPDATE_INTERVAL         = 0.3
 local FALLBACK_PATH_UPDATE_INTERVAL = 0.3
-local SIDE_DISTANCE               = 4
-local RECORD_DELAY                = 0.3
-local STUCK_TIMEOUT               = 2
-local RECORD_INTERVAL             = 0.1
-local MOVE_TOLERANCE              = 0.3
-local WAYPOINT_RADIUS             = 8
-local REPLAY_ADVANCE_RADIUS       = 7
-local FALLBACK_MOVE_TOLERANCE     = 0.05
-local DIRECT_MOVE_DISTANCE        = 15
-local MANUAL_CONTROL_COOLDOWN     = 0.5
+local SIDE_OFFSET                  = 4
+local RECORD_DELAY                 = 0.3
+local STUCK_TIMEOUT                = 2
+local RECORD_INTERVAL              = 0.1
+local WAYPOINT_RADIUS              = 8
+local REPLAY_ADVANCE_RADIUS        = 7
+local DIRECT_MOVE_DISTANCE         = 15
+local MANUAL_CONTROL_COOLDOWN      = 0.5
+
+-- Silly Settings
+local SILLY_ENABLED                = true
+local VICTIM_STILL_TIME            = 10
+local SILLY_COOLDOWN_TIME          = 15
+local MAX_SILLY_DISTANCE           = 30
 
 -- Anti-void
-local USE_SAFETY_RAYCAST          = true
-local SAFE_GROUND_MAX_DROP        = 50
-local SAFE_RAYCAST_CACHE_TIME     = 0.15
-local safetyCache                 = {}
+local USE_SAFETY_RAYCAST           = true
+local SAFE_GROUND_MAX_DROP         = 50
+local SAFE_RAYCAST_CACHE_TIME      = 0.15
+local safetyCache                  = {}
 
 -- ══════════════════════════════════════════════
 --  GUI
@@ -53,7 +203,7 @@ MainFrame.Name = "MainFrame"
 MainFrame.Parent = ScreenGui
 MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-MainFrame.Size = UDim2.new(0, 340, 0, 300)
+MainFrame.Size = UDim2.new(0, 340, 0, 340)
 MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -213,6 +363,22 @@ local AutoSwitchCorner = Instance.new("UICorner")
 AutoSwitchCorner.CornerRadius = UDim.new(0, 8)
 AutoSwitchCorner.Parent = AutoSwitchButton
 
+local SillyButton = Instance.new("TextButton")
+SillyButton.Parent = Content
+SillyButton.Position = UDim2.new(0, 12, 0, 224)
+SillyButton.Size = UDim2.new(1, -24, 0, 32)
+SillyButton.BackgroundColor3 = Color3.fromRGB(255, 100, 150)
+SillyButton.BorderSizePixel = 0
+SillyButton.Font = Enum.Font.GothamBold
+SillyButton.Text = "Silly Mode: ON"
+SillyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+SillyButton.TextSize = 12
+SillyButton.AutoButtonColor = false
+
+local SillyCorner = Instance.new("UICorner")
+SillyCorner.CornerRadius = UDim.new(0, 8)
+SillyCorner.Parent = SillyButton
+
 local Status = Instance.new("TextLabel")
 Status.Parent = Content
 Status.Position = UDim2.new(0, 12, 1, -30)
@@ -228,7 +394,7 @@ local minimized = false
 MinimizeButton.MouseButton1Click:Connect(function()
 	minimized = not minimized
 	Content.Visible = not minimized
-	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 300)
+	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 340)
 	MinimizeButton.Text = minimized and "+" or "−"
 	MainFrame.Draggable = not minimized
 end)
@@ -240,7 +406,7 @@ local targetPlayer = nil
 local isFollowing = false
 local followConnection = nil
 
-local wasInRadius = false
+local inSideStand = false
 local currentSide = nil
 local sideTargetPosition = nil
 local sideReached = false
@@ -268,9 +434,20 @@ local lastMoveTargetPos = nil
 local lastSeatExitTime = 0
 local lastStatusUpdate = 0
 
--- Manual movement override
 local manualControlActive = false
 local lastInputTime = 0
+
+local sillyActive = false
+local sillyIndex = 1
+local sillyJumped = false
+local victimIsMoving = false
+local victimStillTimer = 0
+local sillyCooldownEnd = 0
+local currentSillySequence = nil
+
+local victimHasMovedSinceStart = false
+local sillyJustCompleted = false
+local previousDistance = 0
 
 local function checkManualMovement()
 	local char = player.Character
@@ -339,23 +516,15 @@ local function pruneSafetyCache()
 	end
 end
 
--- ══════════════════════════════════════════════
---  Smooth MoveTo (NO THROTTLE - FIXED)
--- ══════════════════════════════════════════════
 local function smoothMove(humanoid, targetPos)
 	if not humanoid or not targetPos then return end
 	if manualControlActive then return end
-
-	-- NO THROTTLE - Always send move command for smooth movement
 	lastMoveTargetPos = targetPos
 	pcall(function() 
 		humanoid:MoveTo(targetPos) 
 	end)
 end
 
--- ══════════════════════════════════════════════
---  Helpers
--- ══════════════════════════════════════════════
 local function findPlayer(searchText)
 	if searchText == "" then return nil end
 	local searchLower = searchText:lower()
@@ -371,15 +540,22 @@ end
 
 local function getSidePosition(targetRoot, side)
 	if side == "left" then
-		return targetRoot.CFrame * CFrame.new(-SIDE_DISTANCE, 0, 0)
+		return targetRoot.CFrame * CFrame.new(-SIDE_OFFSET, 0, 0)
 	elseif side == "right" then
-		return targetRoot.CFrame * CFrame.new(SIDE_DISTANCE, 0, 0)
+		return targetRoot.CFrame * CFrame.new(SIDE_OFFSET, 0, 0)
 	end
 	return targetRoot.Position
 end
 
 local function isSeated(humanoid)
 	return humanoid and humanoid.SeatPart ~= nil
+end
+
+local function isFollowerSeated()
+	local char = player.Character
+	if not char then return false end
+	local hum = char:FindFirstChild("Humanoid")
+	return hum and hum.SeatPart ~= nil
 end
 
 local function resetFallbackState()
@@ -394,9 +570,12 @@ local function resetFallbackState()
 end
 
 local function stopFollowing()
+	print("============================================")
+	print("[STOP] Stopping follow")
+	print("============================================")
 	isFollowing = false
 	targetPlayer = nil
-	wasInRadius = false
+	inSideStand = false
 	currentSide = nil
 	sideTargetPosition = nil
 	sideReached = false
@@ -406,6 +585,13 @@ local function stopFollowing()
 	resetFallbackState()
 	lastMoveTargetPos = nil
 	manualControlActive = false
+
+	sillyActive = false
+	victimIsMoving = false
+	victimStillTimer = 0
+	victimHasMovedSinceStart = false
+	sillyJustCompleted = false
+	currentSillySequence = nil
 
 	if recordedMode then
 		recordedMode = false
@@ -453,7 +639,7 @@ local function startRecording()
 		local localRoot = localChar:FindFirstChild("HumanoidRootPart")
 		if not targetRoot or not localRoot or not targetHumanoid then return end
 		local distance = (targetRoot.Position - localRoot.Position).Magnitude
-		if distance > STOP_DISTANCE then
+		if distance > EXIT_DISTANCE then
 			local now = tick()
 			if now - lastRecordTime >= RECORD_INTERVAL then
 				local recPos = targetRoot.Position
@@ -478,6 +664,7 @@ local function toggleRecordedMode()
 		return
 	end
 	recordedMode = not recordedMode
+	print("[RECORD] Mode:", recordedMode and "ON" or "OFF")
 	if recordedMode then
 		startRecording()
 		RecordButton.Text = "Disable Recorded Mode"
@@ -500,8 +687,20 @@ end
 local function toggleAutoSwitch()
 	autoSwitchEnabled = not autoSwitchEnabled
 	AutoSwitchButton.Text = autoSwitchEnabled and "Auto-Switcher: ON" or "Auto-Switcher: OFF"
+	print("[AUTO] Auto-Switcher:", autoSwitchEnabled and "ON" or "OFF")
 	if not autoSwitchEnabled then
 		resetFallbackState()
+	end
+end
+
+local function toggleSillyMode()
+	SILLY_ENABLED = not SILLY_ENABLED
+	SillyButton.Text = SILLY_ENABLED and "Silly Mode: ON" or "Silly Mode: OFF"
+	SillyButton.BackgroundColor3 = SILLY_ENABLED and Color3.fromRGB(255, 100, 150) or Color3.fromRGB(60, 60, 70)
+	print("[SILLY] Mode:", SILLY_ENABLED and "ON" or "OFF")
+	if not SILLY_ENABLED then
+		sillyActive = false
+		print("[SILLY] Cancelled active silly behavior")
 	end
 end
 
@@ -519,6 +718,13 @@ local function findNearestWaypointIndex(pos)
 	return bestIdx
 end
 
+local function pickRandomSillySequence()
+	local count = #SILLY_SEQUENCES
+	if count == 0 then return nil, 0 end
+	local index = math.random(1, count)
+	return SILLY_SEQUENCES[index], index
+end
+
 -- ══════════════════════════════════════════════
 --  Main follow loop
 -- ══════════════════════════════════════════════
@@ -528,9 +734,24 @@ local function startFollowing()
 	local lastPathUpdate = 0
 	local currentPath = nil
 	local currentWaypointIndex = 0
-	local lastWasInside = false
 	local lastPathTarget = nil
-	local lastTargetPos = nil
+
+	victimIsMoving = false
+	victimStillTimer = 0
+	sillyCooldownEnd = 0
+	sillyActive = false
+	victimHasMovedSinceStart = false
+	sillyJustCompleted = false
+	inSideStand = false
+	previousDistance = 0
+	currentSillySequence = nil
+
+	print("============================================")
+	print("[START] Following: " .. targetPlayer.Name)
+	print("[START] EXIT_DISTANCE: " .. EXIT_DISTANCE .. " studs")
+	print("[START] ENTER_DISTANCE: " .. ENTER_DISTANCE .. " studs")
+	print("[START] Silly sequences loaded: " .. #SILLY_SEQUENCES)
+	print("============================================")
 
 	followConnection = RunService.RenderStepped:Connect(function(deltaTime)
 		pruneSafetyCache()
@@ -538,6 +759,7 @@ local function startFollowing()
 
 		if not isFollowing or not targetPlayer or not targetPlayer.Parent then
 			if targetPlayer and not targetPlayer.Parent then
+				print("[STOP] Target left")
 				stopFollowing()
 				Status.Text = "Target left"
 			end
@@ -554,7 +776,6 @@ local function startFollowing()
 		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not rootPart or not targetRoot then return end
 
-		-- Anti-seat
 		local followerSeated = isSeated(humanoid)
 		local targetSeated = targetHumanoid and isSeated(targetHumanoid)
 		if followerSeated and not targetSeated then
@@ -569,10 +790,31 @@ local function startFollowing()
 		end
 
 		local distance = (targetRoot.Position - rootPart.Position).Magnitude
-		local isInside = distance <= STOP_DISTANCE
 		local now = tick()
 
-		-- Status update
+		if distance > EXIT_DISTANCE and previousDistance <= EXIT_DISTANCE then
+			print("[RADIUS] EXITED 8 stud radius - Distance: " .. math.floor(distance) .. " studs")
+		elseif distance <= ENTER_DISTANCE and previousDistance > ENTER_DISTANCE then
+			print("[RADIUS] ENTERED 4 stud radius - Distance: " .. math.floor(distance) .. " studs")
+		end
+		previousDistance = distance
+
+		local wasMoving = victimIsMoving
+		if targetHumanoid then
+			local moveDir = targetHumanoid.MoveDirection.Magnitude
+			local vel = targetRoot.AssemblyLinearVelocity.Magnitude
+			victimIsMoving = (moveDir > 0.5) or (vel > 2)
+			if wasMoving ~= victimIsMoving then
+				print("[VICTIM]", victimIsMoving and "Started moving" or "Stopped moving")
+			end
+			if victimIsMoving then
+				victimHasMovedSinceStart = true
+				sillyJustCompleted = false
+			end
+		else
+			victimIsMoving = false
+		end
+
 		if now - lastStatusUpdate > 0.2 then
 			lastStatusUpdate = now
 			local mode = ""
@@ -583,289 +825,271 @@ local function startFollowing()
 				end
 			end
 			local manual = manualControlActive and " [MANUAL]" or ""
-			Status.Text = string.format("%s%s%s (%.0f)", targetPlayer.DisplayName, mode, manual, distance)
+			local silly = sillyActive and " [SILLY]" or ""
+			Status.Text = string.format("%s%s%s%s (%.0f)", targetPlayer.DisplayName, mode, manual, silly, distance)
 			Status.TextColor3 = recordedMode and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(100, 200, 255)
 		end
 
-		-- Side-stand when inside stop radius
-		if isInside then
-			if recordedMode then
-				recordDelayEnd = nil
-				isReplaying = false
-				jumpTriggered = false
-				resetFallbackState()
+		if sillyActive and victimIsMoving then
+			print("[SILLY] Cancelled - victim moved")
+			sillyActive = false
+			humanoid.Jump = false
+			currentSillySequence = nil
+		end
+
+		if not sillyActive and not isFollowerSeated() and SILLY_ENABLED and now >= sillyCooldownEnd then
+			if not victimIsMoving and distance < MAX_SILLY_DISTANCE then
+				victimStillTimer = victimStillTimer + deltaTime
+				if math.floor(victimStillTimer) > math.floor(victimStillTimer - deltaTime) then
+					print("[TIMER] Still:", math.floor(victimStillTimer), "/", VICTIM_STILL_TIME)
+				end
+				if victimStillTimer >= VICTIM_STILL_TIME then
+					currentSillySequence, seqIndex = pickRandomSillySequence()
+					if currentSillySequence then
+						print("[SILLY] TRIGGERED! Playing sequence #" .. seqIndex)
+						sillyActive = true
+						sillyIndex = 1
+						sillyJumped = false
+						victimStillTimer = 0
+						sillyCooldownEnd = now + SILLY_COOLDOWN_TIME
+						inSideStand = false
+					else
+						print("[SILLY] No sequences available!")
+						victimStillTimer = 0
+					end
+				end
+			else
+				if victimStillTimer > 0.5 then
+					print("[TIMER] Reset - " .. (victimIsMoving and "moved" or "too far"))
+				end
+				victimStillTimer = 0
 			end
-			if not wasInRadius then
-				wasInRadius = true
+		else
+			if victimStillTimer > 0.5 and victimIsMoving then
+				print("[TIMER] Reset - moved")
+			end
+			victimStillTimer = 0
+		end
+
+		if sillyActive and currentSillySequence then
+			if sillyIndex <= #currentSillySequence then
+				local data = currentSillySequence[sillyIndex]
+				local movePos = targetRoot.Position + data[1]
+				if isSafePosition(movePos) then
+					smoothMove(humanoid, movePos)
+				end
+				if data[2] and not sillyJumped then
+					print("[SILLY] Jump at index:", sillyIndex)
+					humanoid.Jump = true
+					sillyJumped = true
+				elseif sillyJumped and humanoid.FloorMaterial ~= Enum.Material.Air then
+					sillyJumped = false
+				end
+				local dist = (rootPart.Position - movePos).Magnitude
+				if dist < (data[2] and 5 or 3) then
+					sillyIndex = sillyIndex + 1
+				end
+			else
+				print("[SILLY] Completed")
+				sillyActive = false
+				sillyJustCompleted = true
+				humanoid.Jump = false
+				inSideStand = false
+				currentSide = nil
+				sideTargetPosition = nil
+				sideReached = false
+				currentSillySequence = nil
+			end
+			return
+		end
+
+		if inSideStand and distance > EXIT_DISTANCE then
+			print("[SIDE] Exiting side-stand - exceeded 8 studs, chasing instantly")
+			inSideStand = false
+			currentSide = nil
+			sideTargetPosition = nil
+			sideReached = false
+		end
+
+		if not inSideStand and not victimIsMoving and distance <= ENTER_DISTANCE and victimHasMovedSinceStart then
+			if not sillyActive and victimStillTimer < 8 and not sillyJustCompleted then
+				if recordedMode then
+					recordDelayEnd = nil
+					isReplaying = false
+					jumpTriggered = false
+					resetFallbackState()
+				end
+				print("[SIDE] Entering side-stand (inside 4 studs, victim stopped)")
+				inSideStand = true
 				sideReached = false
 				currentSide = (math.random(1, 2) == 1) and "left" or "right"
 				local sidePos = getSidePosition(targetRoot, currentSide).Position
 				if isSafePosition(sidePos) then
 					sideTargetPosition = sidePos
-					smoothMove(humanoid, sideTargetPosition)
 				else
 					local otherSide = (currentSide == "left") and "right" or "left"
 					local altPos = getSidePosition(targetRoot, otherSide).Position
 					sideTargetPosition = isSafePosition(altPos) and altPos or targetRoot.Position
-					smoothMove(humanoid, sideTargetPosition)
 				end
-			elseif not sideReached then
-				if sideTargetPosition then
-					local distToSide = (rootPart.Position - sideTargetPosition).Magnitude
-					if distToSide <= 2 then
-						sideReached = true
-					else
-						smoothMove(humanoid, sideTargetPosition)
-					end
-				end
-			end
-			lastWasInside = isInside
-			lastTargetPos = targetRoot.Position
-			return
-		else
-			if wasInRadius then
-				wasInRadius = false
-				currentSide = nil
-				sideTargetPosition = nil
-				sideReached = false
 			end
 		end
 
-		-- Recorded mode replay
-		if recordedMode then
-			local targetMoved = lastTargetPos and (targetRoot.Position - lastTargetPos).Magnitude < 20
-			if not fallbackActive and lastWasInside and not isInside and targetMoved then
-				recordedPositions = {}
-				recordedJumpIndices = {}
-				replayIndex = 1
-				recordDelayEnd = tick() + RECORD_DELAY
-				isReplaying = false
-				jumpTriggered = false
-				resetFallbackState()
-			end
-
-			if recordDelayEnd then
-				if tick() >= recordDelayEnd then
-					recordDelayEnd = nil
-					isReplaying = true
-					replayIndex = 1
-					jumpTriggered = false
+		if inSideStand and sideTargetPosition then
+			if not sideReached then
+				local distToSide = (rootPart.Position - sideTargetPosition).Magnitude
+				if distToSide <= 2 then
+					sideReached = true
+					print("[SIDE] Reached side position")
 				else
-					smoothMove(humanoid, rootPart.Position)
-					lastWasInside = isInside
-					lastTargetPos = targetRoot.Position
+					smoothMove(humanoid, sideTargetPosition)
+				end
+			end
+			return
+		end
+
+		if distance > EXIT_DISTANCE then
+			if recordedMode then
+				local targetMoved = lastPathTarget and (targetRoot.Position - lastPathTarget).Magnitude < 20
+				if not fallbackActive and not inSideStand and targetMoved then
+					recordedPositions = {}
+					recordedJumpIndices = {}
+					replayIndex = 1
+					recordDelayEnd = tick() + RECORD_DELAY
+					isReplaying = false
+					jumpTriggered = false
+					resetFallbackState()
+				end
+
+				if recordDelayEnd then
+					if tick() >= recordDelayEnd then
+						recordDelayEnd = nil
+						isReplaying = true
+						replayIndex = 1
+						jumpTriggered = false
+					else
+						smoothMove(humanoid, rootPart.Position)
+						return
+					end
+				end
+
+				if isReplaying and not fallbackActive then
+					if #recordedPositions > 0 and replayIndex <= #recordedPositions then
+						local targetPos = recordedPositions[replayIndex]
+						if not isSafePosition(targetPos) then
+							replayIndex = replayIndex + 1
+							return
+						end
+						smoothMove(humanoid, targetPos)
+
+						if recordedJumpIndices[replayIndex] and not jumpTriggered then
+							humanoid.Jump = true
+							jumpTriggered = true
+							stuckTimer = -1.0
+						elseif jumpTriggered then
+							if humanoid.FloorMaterial == Enum.Material.Air then
+								humanoid.Jump = false
+								jumpTriggered = false
+								stuckTimer = 0
+							end
+						elseif not recordedJumpIndices[replayIndex] then
+							jumpTriggered = false
+						end
+
+						local advance = false
+						local distToTarget = (rootPart.Position - targetPos).Magnitude
+						if recordedJumpIndices[replayIndex] then
+							local horizontalDist = (Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
+							if horizontalDist < REPLAY_ADVANCE_RADIUS + 3 then
+								advance = true
+							elseif not jumpTriggered then
+								advance = true
+							end
+						else
+							if distToTarget < REPLAY_ADVANCE_RADIUS then
+								advance = true
+							end
+						end
+
+						if advance then
+							replayIndex = replayIndex + 1
+							jumpTriggered = false
+							stuckTimer = 0
+						end
+
+						if autoSwitchEnabled then
+							if lastPosition then
+								local moved = (rootPart.Position - lastPosition).Magnitude
+								if moved < 0.5 then
+									if stuckTimer >= 0 and not jumpTriggered then
+										stuckTimer = stuckTimer + deltaTime
+										if stuckTimer >= STUCK_TIMEOUT then
+											fallbackActive = true
+											fallbackPath = nil
+											fallbackLastPathUpdate = 0
+											fallbackLastPathTarget = nil
+											fallbackWaypointIndex = 1
+											stuckTimer = 0
+											Status.Text = "Stuck - using pathfinding"
+										end
+									elseif stuckTimer < 0 then
+										stuckTimer = math.min(stuckTimer + deltaTime, 0)
+									end
+								else
+									stuckTimer = 0
+									if fallbackActive then
+										resetFallbackState()
+									end
+								end
+							end
+							lastPosition = rootPart.Position
+						end
+					else
+						smoothMove(humanoid, rootPart.Position)
+					end
 					return
 				end
 			end
 
-			if isReplaying and not fallbackActive then
-				if #recordedPositions > 0 and replayIndex <= #recordedPositions then
-					local targetPos = recordedPositions[replayIndex]
-					if not isSafePosition(targetPos) then
-						replayIndex = replayIndex + 1
-						lastWasInside = isInside
-						lastTargetPos = targetRoot.Position
-						return
-					end
-					smoothMove(humanoid, targetPos)
+			if recordedMode and fallbackActive then
+				if distance <= EXIT_DISTANCE then
+					local nearestIdx = findNearestWaypointIndex(rootPart.Position)
+					replayIndex = nearestIdx
+					isReplaying = true
+					resetFallbackState()
+					Status.Text = "Resuming replay"
+					return
+				end
 
-					if recordedJumpIndices[replayIndex] and not jumpTriggered then
-						humanoid.Jump = true
-						jumpTriggered = true
-						stuckTimer = -1.0
-					elseif jumpTriggered then
-						if humanoid.FloorMaterial == Enum.Material.Air then
-							humanoid.Jump = false
-							jumpTriggered = false
-							stuckTimer = 0
-						end
-					elseif not recordedJumpIndices[replayIndex] then
-						jumpTriggered = false
-					end
+				if not isSafePosition(targetRoot.Position) then
+					smoothMove(humanoid, rootPart.Position)
+					return
+				end
 
-					local advance = false
-					local distToTarget = (rootPart.Position - targetPos).Magnitude
-					if recordedJumpIndices[replayIndex] then
-						local horizontalDist = (Vector3.new(rootPart.Position.X, 0, rootPart.Position.Z) - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
-						if horizontalDist < REPLAY_ADVANCE_RADIUS + 3 then
-							advance = true
-						elseif not jumpTriggered then
-							advance = true
-						end
+				if distance < DIRECT_MOVE_DISTANCE then
+					if isSafePosition(targetRoot.Position) then
+						smoothMove(humanoid, targetRoot.Position)
 					else
-						if distToTarget < REPLAY_ADVANCE_RADIUS then
-							advance = true
-						end
+						smoothMove(humanoid, rootPart.Position)
 					end
-
-					if advance then
-						replayIndex = replayIndex + 1
-						jumpTriggered = false
-						stuckTimer = 0
-					end
-
-					if autoSwitchEnabled then
-						if lastPosition then
-							local moved = (rootPart.Position - lastPosition).Magnitude
-							if moved < 0.5 then
-								if stuckTimer >= 0 and not jumpTriggered then
-									stuckTimer = stuckTimer + deltaTime
-									if stuckTimer >= STUCK_TIMEOUT then
-										fallbackActive = true
-										fallbackPath = nil
-										fallbackLastPathUpdate = 0
-										fallbackLastPathTarget = nil
-										fallbackWaypointIndex = 1
-										stuckTimer = 0
-										Status.Text = "Stuck - using pathfinding"
-									end
-								elseif stuckTimer < 0 then
-									stuckTimer = math.min(stuckTimer + deltaTime, 0)
-								end
-							else
-								stuckTimer = 0
-								if fallbackActive then
-									resetFallbackState()
-								end
-							end
-						end
-						lastPosition = rootPart.Position
-					end
-				else
-					smoothMove(humanoid, rootPart.Position)
+					return
 				end
-				lastWasInside = isInside
-				lastTargetPos = targetRoot.Position
-				return
-			end
-		end
 
-		-- FALLBACK PATHFINDING
-		if recordedMode and fallbackActive then
-			if distance <= STOP_DISTANCE then
-				local nearestIdx = findNearestWaypointIndex(rootPart.Position)
-				replayIndex = nearestIdx
-				isReplaying = true
-				resetFallbackState()
-				Status.Text = "Resuming replay"
-				lastWasInside = isInside
-				lastTargetPos = targetRoot.Position
-				return
-			end
-
-			if not isSafePosition(targetRoot.Position) then
-				smoothMove(humanoid, rootPart.Position)
-				lastWasInside = isInside
-				lastTargetPos = targetRoot.Position
-				return
-			end
-
-			if distance < DIRECT_MOVE_DISTANCE then
-				if isSafePosition(targetRoot.Position) then
-					smoothMove(humanoid, targetRoot.Position)
-				else
-					smoothMove(humanoid, rootPart.Position)
-				end
-				lastWasInside = isInside
-				lastTargetPos = targetRoot.Position
-				return
-			end
-
-			local needRecompute = false
-			if not manualControlActive then
-				if not fallbackPath then
-					needRecompute = true
-				elseif fallbackWaypointIndex > #fallbackPath:GetWaypoints() then
-					needRecompute = true
-				elseif fallbackLastPathTarget then
-					local targetDrift = (targetRoot.Position - fallbackLastPathTarget).Magnitude
-					if targetDrift > 5 and (now - fallbackLastPathUpdate) >= FALLBACK_PATH_UPDATE_INTERVAL then
+				local needRecompute = false
+				if not manualControlActive then
+					if not fallbackPath then
 						needRecompute = true
-					end
-				end
-			end
-
-			if needRecompute then
-				fallbackLastPathUpdate = now
-				local path = PathfindingService:CreatePath({
-					AgentRadius = 2,
-					AgentHeight = 5,
-					AgentCanJump = true,
-					AgentJumpHeight = 7.5,
-					AgentMaxSlope = 45,
-					WaypointSpacing = 4,
-				})
-				local success = pcall(function()
-					path:ComputeAsync(rootPart.Position, targetRoot.Position)
-				end)
-				if success and path.Status == Enum.PathStatus.Success then
-					local wps = path:GetWaypoints()
-					local startIdx = 1
-					if #wps > 1 and (rootPart.Position - wps[1].Position).Magnitude < WAYPOINT_RADIUS then
-						startIdx = 2
-					end
-					fallbackPath = path
-					fallbackWaypointIndex = startIdx
-					fallbackLastPathTarget = targetRoot.Position
-				else
-					fallbackPath = nil
-				end
-			end
-
-			if fallbackPath and not manualControlActive then
-				local waypoints = fallbackPath:GetWaypoints()
-				while fallbackWaypointIndex <= #waypoints do
-					local wp = waypoints[fallbackWaypointIndex]
-					if (rootPart.Position - wp.Position).Magnitude < WAYPOINT_RADIUS then
-						fallbackWaypointIndex = fallbackWaypointIndex + 1
-					else
-						break
-					end
-				end
-
-				if fallbackWaypointIndex <= #waypoints then
-					local wp = waypoints[fallbackWaypointIndex]
-					if not isSafePosition(wp.Position) then
-						fallbackWaypointIndex = fallbackWaypointIndex + 1
-						if fallbackWaypointIndex > #waypoints then
-							fallbackPath = nil
-						end
-					else
-						smoothMove(humanoid, wp.Position)
-						if wp.Action == Enum.PathWaypointAction.Jump then
-							humanoid.Jump = true
+					elseif fallbackWaypointIndex > #fallbackPath:GetWaypoints() then
+						needRecompute = true
+					elseif fallbackLastPathTarget then
+						local targetDrift = (targetRoot.Position - fallbackLastPathTarget).Magnitude
+						if targetDrift > 5 and (now - fallbackLastPathUpdate) >= FALLBACK_PATH_UPDATE_INTERVAL then
+							needRecompute = true
 						end
 					end
-				else
-					fallbackPath = nil
 				end
-			elseif not manualControlActive then
-				if isSafePosition(targetRoot.Position) then
-					smoothMove(humanoid, targetRoot.Position)
-				else
-					smoothMove(humanoid, rootPart.Position)
-				end
-			end
 
-			lastWasInside = isInside
-			lastTargetPos = targetRoot.Position
-			return
-		end
-
-		-- NORMAL FOLLOWING
-		if not manualControlActive then
-			local recompute = false
-			if not currentPath then
-				recompute = true
-			elseif not lastPathTarget or (targetRoot.Position - lastPathTarget).Magnitude > 5 then
-				recompute = true
-			elseif now - lastPathUpdate >= PATH_UPDATE_INTERVAL then
-				recompute = true
-			end
-
-			if recompute then
-				lastPathUpdate = now
-				if isSafePosition(targetRoot.Position) then
+				if needRecompute then
+					fallbackLastPathUpdate = now
 					local path = PathfindingService:CreatePath({
 						AgentRadius = 2,
 						AgentHeight = 5,
@@ -878,55 +1102,128 @@ local function startFollowing()
 						path:ComputeAsync(rootPart.Position, targetRoot.Position)
 					end)
 					if success and path.Status == Enum.PathStatus.Success then
-						currentPath = path
-						currentWaypointIndex = 1
-						lastPathTarget = targetRoot.Position
+						local wps = path:GetWaypoints()
+						local startIdx = 1
+						if #wps > 1 and (rootPart.Position - wps[1].Position).Magnitude < WAYPOINT_RADIUS then
+							startIdx = 2
+						end
+						fallbackPath = path
+						fallbackWaypointIndex = startIdx
+						fallbackLastPathTarget = targetRoot.Position
 					else
-						currentPath = nil
+						fallbackPath = nil
 					end
-				else
-					currentPath = nil
 				end
+
+				if fallbackPath and not manualControlActive then
+					local waypoints = fallbackPath:GetWaypoints()
+					while fallbackWaypointIndex <= #waypoints do
+						local wp = waypoints[fallbackWaypointIndex]
+						if (rootPart.Position - wp.Position).Magnitude < WAYPOINT_RADIUS then
+							fallbackWaypointIndex = fallbackWaypointIndex + 1
+						else
+							break
+						end
+					end
+
+					if fallbackWaypointIndex <= #waypoints then
+						local wp = waypoints[fallbackWaypointIndex]
+						if not isSafePosition(wp.Position) then
+							fallbackWaypointIndex = fallbackWaypointIndex + 1
+							if fallbackWaypointIndex > #waypoints then
+								fallbackPath = nil
+							end
+						else
+							smoothMove(humanoid, wp.Position)
+							if wp.Action == Enum.PathWaypointAction.Jump then
+								humanoid.Jump = true
+							end
+						end
+					else
+						fallbackPath = nil
+					end
+				elseif not manualControlActive then
+					if isSafePosition(targetRoot.Position) then
+						smoothMove(humanoid, targetRoot.Position)
+					else
+						smoothMove(humanoid, rootPart.Position)
+					end
+				end
+				return
 			end
 
-			if distance < DIRECT_MOVE_DISTANCE then
-				currentPath = nil
-				if isSafePosition(targetRoot.Position) then
-					smoothMove(humanoid, targetRoot.Position)
-				else
-					smoothMove(humanoid, rootPart.Position)
+			if not manualControlActive then
+				local recompute = false
+				if not currentPath then
+					recompute = true
+				elseif not lastPathTarget or (targetRoot.Position - lastPathTarget).Magnitude > 5 then
+					recompute = true
+				elseif now - lastPathUpdate >= PATH_UPDATE_INTERVAL then
+					recompute = true
 				end
-			elseif currentPath then
-				local waypoints = currentPath:GetWaypoints()
-				if currentWaypointIndex <= #waypoints then
-					local waypoint = waypoints[currentWaypointIndex]
-					if isSafePosition(waypoint.Position) then
-						smoothMove(humanoid, waypoint.Position)
+
+				if recompute then
+					lastPathUpdate = now
+					if isSafePosition(targetRoot.Position) then
+						local path = PathfindingService:CreatePath({
+							AgentRadius = 2,
+							AgentHeight = 5,
+							AgentCanJump = true,
+							AgentJumpHeight = 7.5,
+							AgentMaxSlope = 45,
+							WaypointSpacing = 4,
+						})
+						local success = pcall(function()
+							path:ComputeAsync(rootPart.Position, targetRoot.Position)
+						end)
+						if success and path.Status == Enum.PathStatus.Success then
+							currentPath = path
+							currentWaypointIndex = 1
+							lastPathTarget = targetRoot.Position
+						else
+							currentPath = nil
+						end
 					else
 						currentPath = nil
 					end
-					if waypoint.Action == Enum.PathWaypointAction.Jump then
-						humanoid.Jump = true
-					else
-						humanoid.Jump = false
-					end
-					if (rootPart.Position - waypoint.Position).Magnitude < WAYPOINT_RADIUS then
-						currentWaypointIndex = currentWaypointIndex + 1
-					end
-				else
-					currentPath = nil
 				end
-			else
-				if isSafePosition(targetRoot.Position) then
-					smoothMove(humanoid, targetRoot.Position)
+
+				if distance < DIRECT_MOVE_DISTANCE then
+					currentPath = nil
+					if isSafePosition(targetRoot.Position) then
+						smoothMove(humanoid, targetRoot.Position)
+					else
+						smoothMove(humanoid, rootPart.Position)
+					end
+				elseif currentPath then
+					local waypoints = currentPath:GetWaypoints()
+					if currentWaypointIndex <= #waypoints then
+						local waypoint = waypoints[currentWaypointIndex]
+						if isSafePosition(waypoint.Position) then
+							smoothMove(humanoid, waypoint.Position)
+						else
+							currentPath = nil
+						end
+						if waypoint.Action == Enum.PathWaypointAction.Jump then
+							humanoid.Jump = true
+						else
+							humanoid.Jump = false
+						end
+						if (rootPart.Position - waypoint.Position).Magnitude < WAYPOINT_RADIUS then
+							currentWaypointIndex = currentWaypointIndex + 1
+						end
+					else
+						currentPath = nil
+					end
 				else
-					smoothMove(humanoid, rootPart.Position)
+					if isSafePosition(targetRoot.Position) then
+						smoothMove(humanoid, targetRoot.Position)
+					else
+						smoothMove(humanoid, rootPart.Position)
+					end
 				end
 			end
 		end
-
-		lastWasInside = isInside
-		lastTargetPos = targetRoot.Position
 	end)
 end
 
@@ -942,6 +1239,7 @@ FollowButton.MouseButton1Click:Connect(function()
 	end
 	local found = findPlayer(searchText)
 	if found then
+		print("[FOLLOW] Found player:", found.Name)
 		stopFollowing()
 		targetPlayer = found
 		isFollowing = true
@@ -950,12 +1248,14 @@ FollowButton.MouseButton1Click:Connect(function()
 		Status.TextColor3 = Color3.fromRGB(100, 200, 255)
 		SearchBar.Text = found.Name
 	else
+		print("[FOLLOW] Player not found:", searchText)
 		Status.Text = "Not found"
 		Status.TextColor3 = Color3.fromRGB(255, 100, 100)
 	end
 end)
 
 CancelButton.MouseButton1Click:Connect(function()
+	print("[CANCEL] Stopped by user")
 	stopFollowing()
 	SearchBar.Text = ""
 	Status.Text = "Ready"
@@ -964,12 +1264,23 @@ end)
 
 RecordButton.MouseButton1Click:Connect(toggleRecordedMode)
 AutoSwitchButton.MouseButton1Click:Connect(toggleAutoSwitch)
+SillyButton.MouseButton1Click:Connect(toggleSillyMode)
 
 player.CharacterAdded:Connect(function()
+	print("[RESPAWN] Character respawned")
 	if isFollowing then
-		wasInRadius = false
+		inSideStand = false
 		sideReached = false
 		currentSide = nil
 		resetFallbackState()
+		sillyActive = false
+		victimIsMoving = false
+		victimStillTimer = 0
+		victimHasMovedSinceStart = false
+		sillyJustCompleted = false
+		currentSillySequence = nil
 	end
 end)
+
+print("=== Follower Script Ready ===")
+print("[SILLY] Loaded " .. #SILLY_SEQUENCES .. " silly sequences")
