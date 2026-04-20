@@ -1,6 +1,7 @@
 -- Advanced Follower GUI (Simple Pathfinding + Smooth Movement + Anti-Void + Silly Behavior)
 -- REMOVED: Recorded mode, fallback system, auto-switch
 -- KEPT: Manual movement detection, silly sequences, anti-void
+-- ADDED: Stuck detection during silly behavior (forces side-stand after 3s)
 
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
@@ -385,6 +386,8 @@ local victimIsMoving = false
 local victimStillTimer = 0
 local sillyCooldownEnd = 0
 local currentSillySequence = nil
+local sillyLastPosition = nil
+local sillyStuckTimer = 0
 
 local victimHasMovedSinceStart = false
 local sillyJustCompleted = false
@@ -522,6 +525,8 @@ local function stopFollowing()
 	victimHasMovedSinceStart = false
 	sillyJustCompleted = false
 	currentSillySequence = nil
+	sillyLastPosition = nil
+	sillyStuckTimer = 0
 
 	if followConnection then
 		followConnection:Disconnect()
@@ -577,6 +582,8 @@ local function startFollowing()
 	inSideStand = false
 	previousDistance = 0
 	currentSillySequence = nil
+	sillyLastPosition = nil
+	sillyStuckTimer = 0
 
 	print("============================================")
 	print("[START] Following: " .. targetPlayer.Name)
@@ -661,6 +668,7 @@ local function startFollowing()
 			sillyActive = false
 			humanoid.Jump = false
 			currentSillySequence = nil
+			sillyLastPosition = nil
 		end
 
 		if not sillyActive and not isFollowerSeated() and SILLY_ENABLED and now >= sillyCooldownEnd then
@@ -676,6 +684,8 @@ local function startFollowing()
 						sillyActive = true
 						sillyIndex = 1
 						sillyJumped = false
+						sillyLastPosition = nil
+						sillyStuckTimer = 0
 						victimStillTimer = 0
 						sillyCooldownEnd = now + SILLY_COOLDOWN_TIME
 						inSideStand = false
@@ -697,7 +707,51 @@ local function startFollowing()
 			victimStillTimer = 0
 		end
 
+		-- ===== SILLY BEHAVIOR WITH STUCK DETECTION =====
 		if sillyActive and currentSillySequence then
+			-- Track position for stuck detection
+			if not sillyLastPosition then
+				sillyLastPosition = rootPart.Position
+				sillyStuckTimer = 0
+			else
+				local sillyMoved = (rootPart.Position - sillyLastPosition).Magnitude
+				if sillyMoved < 0.5 then
+					sillyStuckTimer = sillyStuckTimer + deltaTime
+					if sillyStuckTimer >= 3 then
+						print("[SILLY] Stuck detected! Canceling silly and forcing side-stand")
+						
+						-- Cancel silly completely
+						sillyActive = false
+						humanoid.Jump = false
+						currentSillySequence = nil
+						sillyLastPosition = nil
+						
+						-- Force side-stand mode
+						inSideStand = true
+						sideReached = false
+						currentSide = (math.random(1, 2) == 1) and "left" or "right"
+						local sidePos = getSidePosition(targetRoot, currentSide).Position
+						if isSafePosition(sidePos) then
+							sideTargetPosition = sidePos
+						else
+							local otherSide = (currentSide == "left") and "right" or "left"
+							local altPos = getSidePosition(targetRoot, otherSide).Position
+							sideTargetPosition = isSafePosition(altPos) and altPos or targetRoot.Position
+						end
+						
+						-- Reset timer so silly can trigger again later
+						victimStillTimer = 0
+						sillyJustCompleted = false
+						
+						print("[SILLY] Moving to side: " .. currentSide)
+						return
+					end
+				else
+					sillyStuckTimer = 0
+					sillyLastPosition = rootPart.Position
+				end
+			end
+			
 			if sillyIndex <= #currentSillySequence then
 				local data = currentSillySequence[sillyIndex]
 				local movePos = targetRoot.Position + data[1]
@@ -725,6 +779,7 @@ local function startFollowing()
 				sideTargetPosition = nil
 				sideReached = false
 				currentSillySequence = nil
+				sillyLastPosition = nil
 			end
 			return
 		end
@@ -916,6 +971,8 @@ player.CharacterAdded:Connect(function()
 		victimHasMovedSinceStart = false
 		sillyJustCompleted = false
 		currentSillySequence = nil
+		sillyLastPosition = nil
+		sillyStuckTimer = 0
 	end
 end)
 
