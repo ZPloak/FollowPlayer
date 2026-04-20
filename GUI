@@ -1,7 +1,8 @@
--- Advanced Follower GUI (Simple Pathfinding + Smooth Movement + Anti-Void + Silly Behavior)
+-- Advanced Follower GUI (Simple Pathfinding + Smooth Movement + Anti-Void + Silly Behavior + Camera Track)
 -- REMOVED: Recorded mode, fallback system, auto-switch
 -- KEPT: Manual movement detection, silly sequences, anti-void
 -- ADDED: Stuck detection during silly behavior (forces side-stand after 3s)
+-- ADDED: Camera tracking (8-20 studs, smooth follow)
 
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
@@ -181,6 +182,12 @@ local SAFE_GROUND_MAX_DROP         = 50
 local SAFE_RAYCAST_CACHE_TIME      = 0.15
 local safetyCache                  = {}
 
+-- Camera Settings
+local CAMERA_ENABLED               = true
+local CAMERA_TRACK_MIN             = 8
+local CAMERA_TRACK_MAX             = 20
+local CAMERA_SMOOTHNESS            = 0.12
+
 -- ══════════════════════════════════════════════
 --  GUI
 -- ══════════════════════════════════════════════
@@ -197,7 +204,7 @@ MainFrame.Name = "MainFrame"
 MainFrame.Parent = ScreenGui
 MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-MainFrame.Size = UDim2.new(0, 340, 0, 240)
+MainFrame.Size = UDim2.new(0, 340, 0, 290)
 MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -341,6 +348,22 @@ local SillyCorner = Instance.new("UICorner")
 SillyCorner.CornerRadius = UDim.new(0, 8)
 SillyCorner.Parent = SillyButton
 
+local CameraButton = Instance.new("TextButton")
+CameraButton.Parent = Content
+CameraButton.Position = UDim2.new(0, 12, 0, 172)
+CameraButton.Size = UDim2.new(1, -24, 0, 36)
+CameraButton.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+CameraButton.BorderSizePixel = 0
+CameraButton.Font = Enum.Font.GothamBold
+CameraButton.Text = "Camera Track: ON"
+CameraButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CameraButton.TextSize = 14
+CameraButton.AutoButtonColor = false
+
+local CameraCorner = Instance.new("UICorner")
+CameraCorner.CornerRadius = UDim.new(0, 8)
+CameraCorner.Parent = CameraButton
+
 local Status = Instance.new("TextLabel")
 Status.Parent = Content
 Status.Position = UDim2.new(0, 12, 1, -32)
@@ -356,7 +379,7 @@ local minimized = false
 MinimizeButton.MouseButton1Click:Connect(function()
 	minimized = not minimized
 	Content.Visible = not minimized
-	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 240)
+	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 290)
 	MinimizeButton.Text = minimized and "+" or "−"
 	MainFrame.Draggable = not minimized
 end)
@@ -555,6 +578,13 @@ local function toggleSillyMode()
 	end
 end
 
+local function toggleCameraMode()
+	CAMERA_ENABLED = not CAMERA_ENABLED
+	CameraButton.Text = CAMERA_ENABLED and "Camera Track: ON" or "Camera Track: OFF"
+	CameraButton.BackgroundColor3 = CAMERA_ENABLED and Color3.fromRGB(100, 150, 255) or Color3.fromRGB(60, 60, 70)
+	print("[CAMERA] Mode:", CAMERA_ENABLED and "ON" or "OFF")
+end
+
 local function pickRandomSillySequence()
 	local count = #SILLY_SEQUENCES
 	if count == 0 then return nil, 0 end
@@ -635,6 +665,28 @@ local function startFollowing()
 		end
 		previousDistance = distance
 
+		-- ===== CAMERA TRACKING =====
+		if CAMERA_ENABLED and targetRoot then
+			local camera = workspace.CurrentCamera
+			if camera then
+				if distance > CAMERA_TRACK_MIN and distance <= CAMERA_TRACK_MAX then
+					-- Track victim's head (8-20 studs)
+					local lookAtPos = targetRoot.Position + Vector3.new(0, 2, 0)
+					local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
+					camera.CFrame = camera.CFrame:Lerp(newCFrame, CAMERA_SMOOTHNESS)
+				elseif distance > CAMERA_TRACK_MAX then
+					-- Face forward when too far
+					local moveDirection = humanoid.MoveDirection
+					if moveDirection.Magnitude > 0.1 then
+						local lookAtPos = rootPart.Position + moveDirection * 10
+						local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
+						camera.CFrame = camera.CFrame:Lerp(newCFrame, CAMERA_SMOOTHNESS * 0.5)
+					end
+				end
+				-- Inside 8 studs: camera stays normal (no tracking)
+			end
+		end
+
 		local wasMoving = victimIsMoving
 		if targetHumanoid then
 			if isVictimSeated(targetHumanoid) then
@@ -659,7 +711,8 @@ local function startFollowing()
 			lastStatusUpdate = now
 			local manual = manualControlActive and " [MANUAL]" or ""
 			local silly = sillyActive and " [SILLY]" or ""
-			Status.Text = string.format("%s%s%s (%.0f)", targetPlayer.DisplayName, manual, silly, distance)
+			local cam = (CAMERA_ENABLED and distance > CAMERA_TRACK_MIN and distance <= CAMERA_TRACK_MAX) and " [CAM]" or ""
+			Status.Text = string.format("%s%s%s%s (%.0f)", targetPlayer.DisplayName, manual, silly, cam, distance)
 			Status.TextColor3 = Color3.fromRGB(100, 200, 255)
 		end
 
@@ -958,6 +1011,7 @@ CancelButton.MouseButton1Click:Connect(function()
 end)
 
 SillyButton.MouseButton1Click:Connect(toggleSillyMode)
+CameraButton.MouseButton1Click:Connect(toggleCameraMode)
 
 player.CharacterAdded:Connect(function()
 	print("[RESPAWN] Character respawned")
@@ -978,3 +1032,4 @@ end)
 
 print("=== Follower Script Ready ===")
 print("[SILLY] Loaded " .. #SILLY_SEQUENCES .. " movements (MVs)")
+print("[CAMERA] Track range: " .. CAMERA_TRACK_MIN .. "-" .. CAMERA_TRACK_MAX .. " studs")
