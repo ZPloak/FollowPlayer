@@ -1,8 +1,9 @@
--- Advanced Follower GUI (Simple Pathfinding + Smooth Movement + Anti-Void + Silly Behavior + Camera Track)
+-- Advanced Follower GUI (Simple Pathfinding + Smooth Movement + Anti-Void + Silly Behavior + Camera Track + Debug)
 -- REMOVED: Recorded mode, fallback system, auto-switch
 -- KEPT: Manual movement detection, silly sequences, anti-void
 -- ADDED: Stuck detection during silly behavior (forces side-stand after 3s)
--- ADDED: Camera tracking (8-20 studs, smooth follow)
+-- ADDED: Camera tracking (5-40 studs, smooth follow)
+-- ADDED: Debug toggle button
 
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
@@ -156,6 +157,14 @@ local SILLY_SEQUENCES = {
 		{V3(0.06,3.65,0.17), false}, {V3(0.06,3.65,0.17), false}, {V3(0.06,3.65,0.17), false},
 		{V3(0.06,3.65,0.17), false}, {V3(0.06,3.65,0.17), false}, {V3(0.06,3.65,0.17), false},
 		{V3(0.06,3.65,0.17), false}, {V3(0.06,3.64,0.17), false}, {V3(0.06,3.53,0.17), false}
+	},
+	-- MV6
+	{
+		{V3(-4.61,-0.34,3.50), false}, {V3(-4.61,-0.34,3.50), false}, {V3(-3.43,-0.34,3.75), false},
+		{V3(-1.70,-0.34,3.76), false}, {V3(0.03,-0.34,3.70), false}, {V3(1.74,-0.34,3.39), false},
+		{V3(3.27,-0.34,2.95), false}, {V3(4.69,-0.34,2.12), false}, {V3(5.33,-0.34,0.65), false},
+		{V3(5.49,-0.34,-0.73), false}, {V3(3.90,-0.34,-1.42), false}, {V3(2.43,-0.34,-2.05), false},
+		{V3(1.30,-0.34,-2.55), false}, {V3(1.30,-0.34,-2.55), false}, {V3(1.30,-0.34,-2.55), false}
 	}
 }
 
@@ -184,9 +193,12 @@ local safetyCache                  = {}
 
 -- Camera Settings
 local CAMERA_ENABLED               = true
-local CAMERA_TRACK_MIN             = 8
-local CAMERA_TRACK_MAX             = 20
+local CAMERA_TRACK_MIN             = 5
+local CAMERA_TRACK_MAX             = 40
 local CAMERA_SMOOTHNESS            = 0.12
+
+-- Debug Settings
+local DEBUG_ENABLED                = false
 
 -- ══════════════════════════════════════════════
 --  GUI
@@ -204,7 +216,7 @@ MainFrame.Name = "MainFrame"
 MainFrame.Parent = ScreenGui
 MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
-MainFrame.Size = UDim2.new(0, 340, 0, 290)
+MainFrame.Size = UDim2.new(0, 340, 0, 340)
 MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -364,6 +376,22 @@ local CameraCorner = Instance.new("UICorner")
 CameraCorner.CornerRadius = UDim.new(0, 8)
 CameraCorner.Parent = CameraButton
 
+local DebugButton = Instance.new("TextButton")
+DebugButton.Parent = Content
+DebugButton.Position = UDim2.new(0, 12, 0, 218)
+DebugButton.Size = UDim2.new(1, -24, 0, 36)
+DebugButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+DebugButton.BorderSizePixel = 0
+DebugButton.Font = Enum.Font.GothamBold
+DebugButton.Text = "Debug: OFF"
+DebugButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+DebugButton.TextSize = 14
+DebugButton.AutoButtonColor = false
+
+local DebugCorner = Instance.new("UICorner")
+DebugCorner.CornerRadius = UDim.new(0, 8)
+DebugCorner.Parent = DebugButton
+
 local Status = Instance.new("TextLabel")
 Status.Parent = Content
 Status.Position = UDim2.new(0, 12, 1, -32)
@@ -379,7 +407,7 @@ local minimized = false
 MinimizeButton.MouseButton1Click:Connect(function()
 	minimized = not minimized
 	Content.Visible = not minimized
-	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 290)
+	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 340)
 	MinimizeButton.Text = minimized and "+" or "−"
 	MainFrame.Draggable = not minimized
 end)
@@ -415,6 +443,17 @@ local sillyStuckTimer = 0
 local victimHasMovedSinceStart = false
 local sillyJustCompleted = false
 local previousDistance = 0
+
+local lastManualCameraTime = 0
+local staringActive = false 
+local stareEndTime = 0
+local stareDelayStart = nil
+
+local function debugPrint(...)
+	if DEBUG_ENABLED then
+		print("[DEBUG]", ...)
+	end
+end
 
 local function checkManualMovement()
 	local char = player.Character
@@ -585,11 +624,28 @@ local function toggleCameraMode()
 	print("[CAMERA] Mode:", CAMERA_ENABLED and "ON" or "OFF")
 end
 
+local function toggleDebugMode()
+	DEBUG_ENABLED = not DEBUG_ENABLED
+	DebugButton.Text = DEBUG_ENABLED and "Debug: ON" or "Debug: OFF"
+	DebugButton.BackgroundColor3 = DEBUG_ENABLED and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(60, 60, 70)
+	print("[DEBUG] Mode:", DEBUG_ENABLED and "ON" or "OFF")
+end
+
 local function pickRandomSillySequence()
 	local count = #SILLY_SEQUENCES
 	if count == 0 then return nil, 0 end
 	local index = math.random(1, count)
 	return SILLY_SEQUENCES[index], index
+end
+
+local function isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
+	if not targetRoot or not rootPart then return false end
+
+	local victimLookDir = targetRoot.CFrame.LookVector
+	local toFollower = (rootPart.Position - targetRoot.Position).Unit
+	local dotProduct = victimLookDir:Dot(toFollower)
+	
+	return dotProduct > 0.94
 end
 
 -- ══════════════════════════════════════════════
@@ -651,7 +707,7 @@ local function startFollowing()
 		if followerSeated and not targetSeated then
 			humanoid.Sit = false
 			humanoid.Jump = true
-			print("[ANTI-SEAT] Forcing exit from seat")
+			debugPrint("[ANTI-SEAT] Forcing exit from seat")
 			Status.Text = "Getting off seat"
 		end
 
@@ -659,31 +715,80 @@ local function startFollowing()
 		local now = tick()
 
 		if distance > EXIT_DISTANCE and previousDistance <= EXIT_DISTANCE then
-			print("[RADIUS] EXITED 8 stud radius - Distance: " .. math.floor(distance) .. " studs")
+			debugPrint("[RADIUS] EXITED 8 stud radius - Distance: " .. math.floor(distance) .. " studs")
 		elseif distance <= ENTER_DISTANCE and previousDistance > ENTER_DISTANCE then
-			print("[RADIUS] ENTERED 4 stud radius - Distance: " .. math.floor(distance) .. " studs")
+			debugPrint("[RADIUS] ENTERED 4 stud radius - Distance: " .. math.floor(distance) .. " studs")
 		end
 		previousDistance = distance
 
-		-- ===== CAMERA TRACKING =====
+		-- ===== CAMERA TRACKING (Manual Override + 0.5s Delay) =====
 		if CAMERA_ENABLED and targetRoot then
 			local camera = workspace.CurrentCamera
 			if camera then
+				local mouseDelta = UserInputService:GetMouseDelta()
+				local isManualCamera = (math.abs(mouseDelta.X) > 0 or math.abs(mouseDelta.Y) > 0)
+				
+				if isManualCamera then
+					lastManualCameraTime = now
+				end
+				
 				if distance > CAMERA_TRACK_MIN and distance <= CAMERA_TRACK_MAX then
-					-- Track victim's head (8-20 studs)
-					local lookAtPos = targetRoot.Position + Vector3.new(0, 2, 0)
-					local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
-					camera.CFrame = camera.CFrame:Lerp(newCFrame, CAMERA_SMOOTHNESS)
-				elseif distance > CAMERA_TRACK_MAX then
-					-- Face forward when too far
-					local moveDirection = humanoid.MoveDirection
-					if moveDirection.Magnitude > 0.1 then
-						local lookAtPos = rootPart.Position + moveDirection * 10
+					if lastManualCameraTime and (now - lastManualCameraTime) >= 0.5 then
+						local lookAtPos = targetRoot.Position + Vector3.new(0, 2, 0)
 						local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
-						camera.CFrame = camera.CFrame:Lerp(newCFrame, CAMERA_SMOOTHNESS * 0.5)
+						camera.CFrame = camera.CFrame:Lerp(newCFrame, CAMERA_SMOOTHNESS)
 					end
 				end
-				-- Inside 8 studs: camera stays normal (no tracking)
+			end
+		end
+
+		-- ===== STARING CONTEST =====
+		if targetRoot and rootPart then
+			local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
+			local now = tick()
+			
+			if victimLooking then
+				if not staringActive and not stareDelayStart then
+					stareDelayStart = now
+					debugPrint("[STARE] Victim looking! Waiting 1.5s...")
+				elseif staringActive then
+					stareEndTime = now + 0.5
+				end
+			else
+				if staringActive then
+					if now >= stareEndTime then
+						staringActive = false
+						stareDelayStart = nil
+						debugPrint("[STARE] Victim looked away")
+					end
+				elseif stareDelayStart then
+					stareDelayStart = nil
+					debugPrint("[STARE] Victim looked away during delay")
+				end
+			end
+			
+			if stareDelayStart and not staringActive then
+				if now - stareDelayStart >= 1.5 then
+					staringActive = true
+					stareEndTime = now + 0.5
+					stareDelayStart = nil
+					debugPrint("[STARE] Now staring at victim!")
+				end
+			end
+			
+			if staringActive then
+				local camera = workspace.CurrentCamera
+				if camera then
+					local lookAtPos = targetRoot.Position + Vector3.new(0, 2, 0)
+					local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
+					camera.CFrame = camera.CFrame:Lerp(newCFrame, 0.08)
+				end
+				
+				local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
+				if flatDir.Magnitude > 0.1 then
+					local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
+					rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.15)
+				end
 			end
 		end
 
@@ -696,12 +801,16 @@ local function startFollowing()
 				local vel = targetRoot.AssemblyLinearVelocity.Magnitude
 				victimIsMoving = (moveDir > 0.5) or (vel > 2)
 				if wasMoving ~= victimIsMoving then
-					print("[VICTIM]", victimIsMoving and "Started moving" or "Stopped moving")
+					debugPrint("[VICTIM]", victimIsMoving and "Started moving" or "Stopped moving")
 				end
 			end
 			if victimIsMoving then
 				victimHasMovedSinceStart = true
 				sillyJustCompleted = false
+			end
+			
+			if not victimHasMovedSinceStart and distance <= ENTER_DISTANCE then
+				victimHasMovedSinceStart = true
 			end
 		else
 			victimIsMoving = false
@@ -716,24 +825,16 @@ local function startFollowing()
 			Status.TextColor3 = Color3.fromRGB(100, 200, 255)
 		end
 
-		if sillyActive and victimIsMoving then
-			print("[SILLY] Cancelled - victim moved")
-			sillyActive = false
-			humanoid.Jump = false
-			currentSillySequence = nil
-			sillyLastPosition = nil
-		end
-
 		if not sillyActive and not isFollowerSeated() and SILLY_ENABLED and now >= sillyCooldownEnd then
 			if not victimIsMoving and distance <= EXIT_DISTANCE and distance < MAX_SILLY_DISTANCE then
 				victimStillTimer = victimStillTimer + deltaTime
 				if math.floor(victimStillTimer) > math.floor(victimStillTimer - deltaTime) then
-					print("[TIMER] Still:", math.floor(victimStillTimer), "/", VICTIM_STILL_TIME)
+					debugPrint("[TIMER] Still:", math.floor(victimStillTimer), "/", VICTIM_STILL_TIME)
 				end
 				if victimStillTimer >= VICTIM_STILL_TIME then
 					currentSillySequence, seqIndex = pickRandomSillySequence()
 					if currentSillySequence then
-						print("[SILLY] TRIGGERED! Playing Movement #" .. seqIndex)
+						debugPrint("[SILLY] TRIGGERED! Playing Movement #" .. seqIndex)
 						sillyActive = true
 						sillyIndex = 1
 						sillyJumped = false
@@ -743,26 +844,25 @@ local function startFollowing()
 						sillyCooldownEnd = now + SILLY_COOLDOWN_TIME
 						inSideStand = false
 					else
-						print("[SILLY] No movements available!")
+						debugPrint("[SILLY] No movements available!")
 						victimStillTimer = 0
 					end
 				end
 			else
 				if victimStillTimer > 0.5 then
-					print("[TIMER] Reset - " .. (victimIsMoving and "moved" or "outside 8 studs"))
+					debugPrint("[TIMER] Reset - " .. (victimIsMoving and "moved" or "outside 8 studs"))
 				end
 				victimStillTimer = 0
 			end
 		else
 			if victimStillTimer > 0.5 and victimIsMoving then
-				print("[TIMER] Reset - moved")
+				debugPrint("[TIMER] Reset - moved")
 			end
 			victimStillTimer = 0
 		end
 
 		-- ===== SILLY BEHAVIOR WITH STUCK DETECTION =====
 		if sillyActive and currentSillySequence then
-			-- Track position for stuck detection
 			if not sillyLastPosition then
 				sillyLastPosition = rootPart.Position
 				sillyStuckTimer = 0
@@ -771,15 +871,13 @@ local function startFollowing()
 				if sillyMoved < 0.5 then
 					sillyStuckTimer = sillyStuckTimer + deltaTime
 					if sillyStuckTimer >= 3 then
-						print("[SILLY] Stuck detected! Canceling silly and forcing side-stand")
+						debugPrint("[SILLY] Stuck detected! Canceling silly and forcing side-stand")
 						
-						-- Cancel silly completely
 						sillyActive = false
 						humanoid.Jump = false
 						currentSillySequence = nil
 						sillyLastPosition = nil
 						
-						-- Force side-stand mode
 						inSideStand = true
 						sideReached = false
 						currentSide = (math.random(1, 2) == 1) and "left" or "right"
@@ -792,11 +890,10 @@ local function startFollowing()
 							sideTargetPosition = isSafePosition(altPos) and altPos or targetRoot.Position
 						end
 						
-						-- Reset timer so silly can trigger again later
 						victimStillTimer = 0
 						sillyJustCompleted = false
 						
-						print("[SILLY] Moving to side: " .. currentSide)
+						debugPrint("[SILLY] Moving to side: " .. currentSide)
 						return
 					end
 				else
@@ -812,7 +909,7 @@ local function startFollowing()
 					smoothMove(humanoid, movePos)
 				end
 				if data[2] and not sillyJumped then
-					print("[SILLY] Jump at index:", sillyIndex)
+					debugPrint("[SILLY] Jump at index:", sillyIndex)
 					humanoid.Jump = true
 					sillyJumped = true
 				elseif sillyJumped and humanoid.FloorMaterial ~= Enum.Material.Air then
@@ -823,7 +920,7 @@ local function startFollowing()
 					sillyIndex = sillyIndex + 1
 				end
 			else
-				print("[SILLY] Completed")
+				debugPrint("[SILLY] Completed")
 				sillyActive = false
 				sillyJustCompleted = true
 				humanoid.Jump = false
@@ -838,7 +935,7 @@ local function startFollowing()
 		end
 
 		if inSideStand and distance > EXIT_DISTANCE then
-			print("[SIDE] Exiting side-stand - exceeded 8 studs, chasing instantly")
+			debugPrint("[SIDE] Exiting side-stand - exceeded 8 studs, chasing instantly")
 			inSideStand = false
 			currentSide = nil
 			sideTargetPosition = nil
@@ -847,7 +944,7 @@ local function startFollowing()
 
 		if not inSideStand and not victimIsMoving and distance <= ENTER_DISTANCE and victimHasMovedSinceStart then
 			if not sillyActive and victimStillTimer < 8 and not sillyJustCompleted then
-				print("[SIDE] Entering side-stand (inside 4 studs, victim stopped)")
+				debugPrint("[SIDE] Entering side-stand (inside 4 studs, victim stopped)")
 				inSideStand = true
 				sideReached = false
 				currentSide = (math.random(1, 2) == 1) and "left" or "right"
@@ -867,7 +964,7 @@ local function startFollowing()
 				local distToSide = (rootPart.Position - sideTargetPosition).Magnitude
 				if distToSide <= 2 then
 					sideReached = true
-					print("[SIDE] Reached side position")
+					debugPrint("[SIDE] Reached side position")
 				else
 					smoothMove(humanoid, sideTargetPosition)
 				end
@@ -878,7 +975,6 @@ local function startFollowing()
 		-- ===== CHASE WHEN OUTSIDE 8 STUDS (optimized pathfinding) =====
 		if distance > EXIT_DISTANCE then
 			if not manualControlActive then
-				-- If very close, just move directly (no pathfinding needed)
 				if distance < DIRECT_MOVE_DISTANCE then
 					if isSafePosition(targetRoot.Position) then
 						smoothMove(humanoid, targetRoot.Position)
@@ -889,20 +985,18 @@ local function startFollowing()
 					return
 				end
 
-				-- Only recompute path when target moves significantly
 				local needRecompute = false
 				if not currentPath then
 					needRecompute = true
-					print("[PATH] Computing initial path")
+					debugPrint("[PATH] Computing initial path")
 				elseif lastPathTarget then
 					local targetDrift = (targetRoot.Position - lastPathTarget).Magnitude
 					if targetDrift > 8 then
 						needRecompute = true
-						print("[PATH] Recomputing - target moved " .. math.floor(targetDrift) .. " studs")
+						debugPrint("[PATH] Recomputing - target moved " .. math.floor(targetDrift) .. " studs")
 					end
 				end
 
-				-- Throttle path computations
 				if needRecompute and (now - lastPathUpdate) < 0.5 then
 					needRecompute = false
 				end
@@ -925,17 +1019,16 @@ local function startFollowing()
 							currentPath = path
 							currentWaypointIndex = 1
 							lastPathTarget = targetRoot.Position
-							print("[PATH] Path computed successfully with " .. #path:GetWaypoints() .. " waypoints")
+							debugPrint("[PATH] Path computed successfully with " .. #path:GetWaypoints() .. " waypoints")
 						else
 							currentPath = nil
-							print("[PATH] Path computation failed")
+							debugPrint("[PATH] Path computation failed")
 						end
 					else
 						currentPath = nil
 					end
 				end
 
-				-- Follow the existing path
 				if currentPath then
 					local waypoints = currentPath:GetWaypoints()
 					
@@ -1012,6 +1105,7 @@ end)
 
 SillyButton.MouseButton1Click:Connect(toggleSillyMode)
 CameraButton.MouseButton1Click:Connect(toggleCameraMode)
+DebugButton.MouseButton1Click:Connect(toggleDebugMode)
 
 player.CharacterAdded:Connect(function()
 	print("[RESPAWN] Character respawned")
@@ -1033,3 +1127,4 @@ end)
 print("=== Follower Script Ready ===")
 print("[SILLY] Loaded " .. #SILLY_SEQUENCES .. " movements (MVs)")
 print("[CAMERA] Track range: " .. CAMERA_TRACK_MIN .. "-" .. CAMERA_TRACK_MAX .. " studs")
+print("[DEBUG] Debug mode available - click Debug button to toggle")
