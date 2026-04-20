@@ -449,6 +449,8 @@ local staringActive = false
 local stareEndTime = 0
 local stareDelayStart = nil
 
+local lastSillyIndex = 0
+
 local function debugPrint(...)
 	if DEBUG_ENABLED then
 		print("[DEBUG]", ...)
@@ -634,7 +636,17 @@ end
 local function pickRandomSillySequence()
 	local count = #SILLY_SEQUENCES
 	if count == 0 then return nil, 0 end
-	local index = math.random(1, count)
+	
+	if count == 1 then
+		return SILLY_SEQUENCES[1], 1
+	end
+	
+	local index
+	repeat
+		index = math.random(1, count)
+	until index ~= lastSillyIndex
+	
+	lastSillyIndex = index
 	return SILLY_SEQUENCES[index], index
 end
 
@@ -768,7 +780,7 @@ local function startFollowing()
 			end
 			
 			if stareDelayStart and not staringActive then
-				if now - stareDelayStart >= 1.5 then
+				if now - stareDelayStart >= 0.8 then
 					staringActive = true
 					stareEndTime = now + 0.5
 					stareDelayStart = nil
