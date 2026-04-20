@@ -762,7 +762,7 @@ local function startFollowing()
 			if victimLooking then
 				if not staringActive and not stareDelayStart then
 					stareDelayStart = now
-					debugPrint("[STARE] Victim looking! Waiting 1.5s...")
+					debugPrint("[STARE] Victim looking! Waiting 0.8s...")
 				elseif staringActive then
 					stareEndTime = now + 0.5
 				end
