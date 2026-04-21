@@ -825,6 +825,12 @@ local function scanClickables(centerPos)
 		if obj:IsA("ClickDetector") or obj:IsA("ProximityPrompt") then
 			local parent = obj.Parent
 			if parent and parent:IsA("BasePart") then
+				-- Skip if it's part of the victim's character
+				if targetPlayer and targetPlayer.Character then
+					if parent:IsDescendantOf(targetPlayer.Character) then
+						continue  -- Skip victim's body parts
+					end
+				end
 				if (parent.Position - centerPos).Magnitude <= CLICK_SEARCH_RADIUS then
 					table.insert(found, obj)
 				end
@@ -1127,6 +1133,7 @@ local function startFollowing()
 			if victimIsMoving then
 				victimHasMovedSinceStart = true
 				sillyJustCompleted = false
+				lastVictimPromptScan = 0 
 			end
 			
 			if not victimHasMovedSinceStart and distance <= ENTER_DISTANCE then
@@ -1235,6 +1242,12 @@ local function startFollowing()
 									end
 									victimStillTimer = 0
 									sillyJustCompleted = true
+									
+									-- Reset click timers to prevent spam
+									nextClickTime = 0
+									lastVictimPromptScan = now + 5  -- Don't scan again for 5 seconds
+									
+									debugPrint("[VICTIM CLICK] Success! Disabled further prompts for 5s")
 									break  -- Only click one thing per scan
 								end
 							end
