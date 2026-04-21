@@ -1396,7 +1396,7 @@ end
 			victimStillTimer = 0
 		end
 
-										-- ===== VICTIM PROMPT CLICK (FOR DUET EMOTES - WITH COOLDOWN) =====
+												-- ===== VICTIM PROMPT CLICK (FOR DUET EMOTES - WITH COOLDOWN) =====
 		if RANDOM_CLICK_ENABLED and targetRoot and not sillyActive then
 			local now = tick()
 			if now - lastVictimPromptScan > 3 then  -- Only scan every 3 seconds
@@ -1411,7 +1411,10 @@ end
 							if dist <= 8 then  -- Within 8 studs
 								debugPrint("[DUET] Found prompt on victim: " .. obj.Parent.Name .. " - clicking in 1.0s")
 								
-								task.wait(1.0)  --  1 second delay before clicking
+								-- Reset silly timer immediately so it doesn't trigger during the 1s wait
+								victimStillTimer = 0
+								
+								task.wait(1.0)
 								
 								if not targetChar or not targetChar.Parent then return end
 								local newDist = (parent.Position - rootPart.Position).Magnitude
@@ -1438,8 +1441,20 @@ end
 								end)
 								
 								if success then
-									debugPrint("[DUET] Successfully clicked duet prompt!")
-									lastVictimPromptScan = now + 5  --  5 second cooldown after success
+									debugPrint("Successfully clicked Victim's ProximityPrompt!")
+									lastVictimPromptScan = now + 2  -- 5 second cooldown after success
+									
+									-- Reset silly timer again after success
+									victimStillTimer = 0
+									sillyJustCompleted = true
+									
+									-- Cancel any active silly sequence
+									if sillyActive then
+										sillyActive = false
+										currentSillySequence = nil
+										debugPrint("Cancelled silly mode")
+									end
+									
 									break
 								end
 							end
