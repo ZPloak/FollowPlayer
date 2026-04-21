@@ -216,6 +216,10 @@ local VEHICLE_SEAT_DELAY_MIN      = 0.5
 local VEHICLE_SEAT_DELAY_MAX      = 2.0
 local VEHICLE_SEARCH_RADIUS       = 20
 
+-- Social Awareness Settings
+local SOCIAL_AWARENESS_ENABLED      = true
+local BLOCKED_MOVE_DISTANCE         = 3
+
 -- ══════════════════════════════════════════════
 --  GUI
 -- ══════════════════════════════════════════════
@@ -424,6 +428,114 @@ Status.TextColor3 = Color3.fromRGB(180, 180, 190)
 Status.TextSize = 13
 Status.TextXAlignment = Enum.TextXAlignment.Center
 
+local consoleLogs = {}
+
+-- ===== SEPARATE DEBUG PANEL (slides out from main GUI) =====
+local DebugPanel = Instance.new("Frame")
+DebugPanel.Name = "DebugPanel"
+DebugPanel.Parent = ScreenGui
+DebugPanel.Size = UDim2.new(0, 160, 0, 340)
+DebugPanel.Position = UDim2.new(0.5, 170, 0.5, 0)
+DebugPanel.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+DebugPanel.BorderSizePixel = 0
+DebugPanel.Visible = false
+DebugPanel.AnchorPoint = Vector2.new(0, 0.5)
+
+local DebugCorner = Instance.new("UICorner")
+DebugCorner.CornerRadius = UDim.new(0, 8)
+DebugCorner.Parent = DebugPanel
+
+local DebugHeader = Instance.new("Frame")
+DebugHeader.Name = "Header"
+DebugHeader.Parent = DebugPanel
+DebugHeader.Size = UDim2.new(1, 0, 0, 30)
+DebugHeader.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+DebugHeader.BorderSizePixel = 0
+
+local DebugTitle = Instance.new("TextLabel")
+DebugTitle.Parent = DebugHeader
+DebugTitle.Size = UDim2.new(1, -10, 1, 0)
+DebugTitle.Position = UDim2.new(0, 10, 0, 0)
+DebugTitle.BackgroundTransparency = 1
+DebugTitle.Font = Enum.Font.GothamBold
+DebugTitle.Text = "Debug Tools"
+DebugTitle.TextColor3 = Color3.fromRGB(255, 200, 100)
+DebugTitle.TextSize = 14
+DebugTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local CopyButton = Instance.new("TextButton")
+CopyButton.Parent = DebugPanel
+CopyButton.Position = UDim2.new(0, 10, 0, 40)
+CopyButton.Size = UDim2.new(1, -20, 0, 36)
+CopyButton.BackgroundColor3 = Color3.fromRGB(60, 80, 120)
+CopyButton.BorderSizePixel = 0
+CopyButton.Font = Enum.Font.GothamBold
+CopyButton.Text = "Copy Console"
+CopyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CopyButton.TextSize = 14
+CopyButton.AutoButtonColor = false
+
+local CopyCorner = Instance.new("UICorner")
+CopyCorner.CornerRadius = UDim.new(0, 6)
+CopyCorner.Parent = CopyButton
+
+-- Link movement: when MainFrame moves, DebugPanel follows
+MainFrame:GetPropertyChangedSignal("Position"):Connect(function()
+	DebugPanel.Position = UDim2.new(
+		MainFrame.Position.X.Scale,
+		MainFrame.Position.X.Offset + 170,
+		MainFrame.Position.Y.Scale,
+		MainFrame.Position.Y.Offset
+	)
+end)
+
+-- Toggle function
+function toggleDebugPanel()
+	DebugPanel.Visible = not DebugPanel.Visible
+end
+
+-- Copy function
+local function copyConsole()
+	local text = table.concat(consoleLogs, "\n")
+	if text == "" then
+		text = "No logs captured yet. Turn on Debug mode first!"
+	end
+	
+	pcall(function()
+		setclipboard(text)
+		print("[DEBUG] Copied " .. #consoleLogs .. " log entries to clipboard!")
+	end)
+	
+	CopyButton.Text = "Copied!"
+	task.wait(1)
+	CopyButton.Text = "Copy Console"
+end
+
+CopyButton.MouseButton1Click:Connect(copyConsole)
+
+local ClearButton = Instance.new("TextButton")
+ClearButton.Parent = DebugPanel
+ClearButton.Position = UDim2.new(0, 10, 0, 86)
+ClearButton.Size = UDim2.new(1, -20, 0, 36)
+ClearButton.BackgroundColor3 = Color3.fromRGB(120, 60, 60)
+ClearButton.BorderSizePixel = 0
+ClearButton.Font = Enum.Font.GothamBold
+ClearButton.Text = "Clear Logs"
+ClearButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ClearButton.TextSize = 14
+ClearButton.AutoButtonColor = false
+
+local ClearCorner = Instance.new("UICorner")
+ClearCorner.CornerRadius = UDim.new(0, 6)
+ClearCorner.Parent = ClearButton
+
+ClearButton.MouseButton1Click:Connect(function()
+	consoleLogs = {}
+	ClearButton.Text = "Cleared!"
+	task.wait(1)
+	ClearButton.Text = "Clear Logs"
+end)
+
 local minimized = false
 MinimizeButton.MouseButton1Click:Connect(function()
 	minimized = not minimized
@@ -489,9 +601,32 @@ local lastVehicleScan = 0
 
 local lastVictimPromptScan = 0
 
+local lastBlockedCheck = 0
+local isAdjustingPosition = false
+
+-- Timestamp function (HH:MM:SS.mmm)
+local function getTimestamp()
+	local now = os.time()
+	local ms = math.floor((tick() % 1) * 1000)
+	local hour = math.floor((now % 86400) / 3600)
+	local minute = math.floor((now % 3600) / 60)
+	local second = now % 60
+	return string.format("%02d:%02d:%02d.%03d", hour, minute, second, ms)
+end
+
 local function debugPrint(...)
 	if DEBUG_ENABLED then
-		print("[DEBUG]", ...)
+		local args = {...}
+		local msg = table.concat(args, " ")
+		local timestamped = string.format("[%s] [DEBUG] %s", getTimestamp(), msg)
+		print(timestamped)
+		
+		-- SAFE CHECK: Only insert if consoleLogs exists
+		if consoleLogs then
+			pcall(function()
+				table.insert(consoleLogs, timestamped)
+			end)
+		end
 	end
 end
 
@@ -788,7 +923,18 @@ local function toggleDebugMode()
 	DEBUG_ENABLED = not DEBUG_ENABLED
 	DebugButton.Text = DEBUG_ENABLED and "Debug: ON" or "Debug: OFF"
 	DebugButton.BackgroundColor3 = DEBUG_ENABLED and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(50, 50, 60)
-	print("[DEBUG] Mode:", DEBUG_ENABLED and "ON" or "OFF")
+	toggleDebugPanel()
+	
+	local msg = "Mode: " .. (DEBUG_ENABLED and "ON" or "OFF")
+	local timestamped = string.format("[%s] [DEBUG] %s", getTimestamp(), msg)
+	print(timestamped)
+	
+	-- SAFE CHECK
+	if consoleLogs then
+		pcall(function()
+			table.insert(consoleLogs, timestamped)
+		end)
+	end
 end
 
 local function pickRandomSillySequence()
@@ -825,12 +971,6 @@ local function scanClickables(centerPos)
 		if obj:IsA("ClickDetector") or obj:IsA("ProximityPrompt") then
 			local parent = obj.Parent
 			if parent and parent:IsA("BasePart") then
-				-- Skip if it's part of the victim's character
-				if targetPlayer and targetPlayer.Character then
-					if parent:IsDescendantOf(targetPlayer.Character) then
-						continue  -- Skip victim's body parts
-					end
-				end
 				if (parent.Position - centerPos).Magnitude <= CLICK_SEARCH_RADIUS then
 					table.insert(found, obj)
 				end
@@ -847,15 +987,21 @@ local function clickRandomObject()
 		return false 
 	end
 	
+	-- Pick ONE random target
 	local target = clickablesCache[math.random(1, #clickablesCache)]
+	
+	-- IMMEDIATELY clear the cache to prevent ANY other clicks
+	local targetName = target.Parent and target.Parent.Name or "Unknown"
+	clickablesCache = {}
+	
+	debugPrint("[CLICK] Attempting to click: " .. targetName)
+	
 	local success = pcall(function()
 		if target:IsA("ClickDetector") then
 			target:Fire()
-			debugPrint("[CLICK] Fired ClickDetector: " .. target.Parent.Name)
 		elseif target:IsA("ProximityPrompt") then
 			local holdTime = target.HoldDuration or 0
 			if holdTime > 0 then
-				debugPrint("[CLICK] Holding ProximityPrompt for " .. holdTime .. "s")
 				target:InputHoldBegin()
 				task.wait(holdTime + 0.05)
 				target:InputHoldEnd()
@@ -864,17 +1010,79 @@ local function clickRandomObject()
 				task.wait(0.05)
 				target:InputHoldEnd()
 			end
-			debugPrint("[CLICK] Triggered ProximityPrompt: " .. target.Parent.Name)
 		end
 	end)
 	
 	if success then
-		debugPrint("[CLICK] Click successful!")
+		debugPrint("[CLICK] Successfully clicked: " .. targetName)
 	else
-		debugPrint("[CLICK] Click failed :(")
+		debugPrint("[CLICK] Failed to click: " .. targetName)
 	end
 	
 	return success
+end
+
+-- Function: Check if someone is blocking the view
+local function getBlockerInFront(rootPart, targetRoot)
+	local direction = (targetRoot.Position - rootPart.Position).Unit
+	local distance = (targetRoot.Position - rootPart.Position).Magnitude
+	
+	-- Raycast from follower to victim
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = {rootPart.Parent, targetRoot.Parent}
+	
+	local rayResult = Workspace:Raycast(rootPart.Position, direction * distance, rayParams)
+	
+	if rayResult then
+		local hitPart = rayResult.Instance
+		local hitPlayer = Players:GetPlayerFromCharacter(hitPart.Parent)
+		if hitPlayer and hitPlayer ~= player and hitPlayer ~= targetPlayer then
+			return hitPlayer, rayResult.Position
+		end
+	end
+	
+	return nil, nil
+end
+
+-- Function: Find an available spot to move to
+local function findClearSpot(rootPart, targetRoot, blockerPos)
+	local direction = (targetRoot.Position - rootPart.Position).Unit
+	local perpendicular = Vector3.new(-direction.Z, 0, direction.X) -- Left direction
+	
+	local spots = {
+		rootPart.Position + perpendicular * BLOCKED_MOVE_DISTANCE,  -- Left
+		rootPart.Position - perpendicular * BLOCKED_MOVE_DISTANCE,  -- Right
+	}
+	
+	for _, spot in ipairs(spots) do
+		-- Check if spot is safe (raycast down for ground)
+		local rayParams = RaycastParams.new()
+		rayParams.FilterType = Enum.RaycastFilterType.Exclude
+		rayParams.FilterDescendantsInstances = {rootPart.Parent}
+		
+		local groundCheck = Workspace:Raycast(spot + Vector3.new(0, 3, 0), Vector3.new(0, -5, 0), rayParams)
+		if groundCheck then
+			-- Check if spot isn't blocked by another player
+			local clear = true
+			for _, otherPlayer in ipairs(Players:GetPlayers()) do
+				if otherPlayer ~= player and otherPlayer.Character then
+					local otherRoot = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+					if otherRoot then
+						if (otherRoot.Position - spot).Magnitude < 2.5 then
+							clear = false
+							break
+						end
+					end
+				end
+			end
+			if clear then
+				return spot
+			end
+		end
+	end
+	
+	return nil
 end
 
 -- ══════════════════════════════════════════════
@@ -945,95 +1153,64 @@ local function startFollowing()
 			Status.Text = "Getting off seat"
 		end
 
-				-- ===== VEHICLE FOLLOW: Enter seat when victim is seated =====
-		if VEHICLE_FOLLOW_ENABLED and targetSeated and not followerSeated and not sillyActive then
-			local now = tick()
-			
-			-- Only check every 2 seconds to avoid spam
-			if now - lastVehicleScan > 2 then
-				lastVehicleScan = now
-				
-				-- Find nearby seats with ANY type of interaction
-				local nearbySeats = {}
-				for _, obj in ipairs(Workspace:GetDescendants()) do
-					if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
-						local parent = obj.Parent
-						if parent and parent:IsA("BasePart") then
-							local dist = (parent.Position - rootPart.Position).Magnitude
-							if dist <= VEHICLE_SEARCH_RADIUS then
-								-- Check if it's a seat
-								local isSeat = parent:IsA("Seat") or parent:IsA("VehicleSeat") or parent.Name:lower():find("seat")
-								if isSeat and obj.Enabled then
-									-- Check if seat is NOT occupied (skip if victim is in it)
-									local seatOccupied = false
-									if parent:IsA("Seat") or parent:IsA("VehicleSeat") then
-										seatOccupied = (parent.Occupant ~= nil)
-									end
-									if not seatOccupied then
-										table.insert(nearbySeats, {
-											object = obj,
-											distance = dist,
-											part = parent
-										})
-									end
-								end
-							end
+		-- ===== VEHICLE FOLLOW: Enter seat when victim is seated =====
+if VEHICLE_FOLLOW_ENABLED and targetSeated and not followerSeated and not sillyActive then
+	local now = tick()
+	
+	-- Only check every 2 seconds to avoid spam
+	if now - lastVehicleScan > 2 then
+		lastVehicleScan = now
+		
+		-- Find nearby ProximityPrompts (vehicle seats)
+		local nearbyPrompts = {}
+		for _, obj in ipairs(Workspace:GetDescendants()) do
+			if obj:IsA("ProximityPrompt") then
+				local parent = obj.Parent
+				if parent and parent:IsA("BasePart") then
+					local dist = (parent.Position - rootPart.Position).Magnitude
+					if dist <= VEHICLE_SEARCH_RADIUS then
+						-- Check if it's a vehicle seat (usually named "Seat" or "VehicleSeat")
+						local isSeat = parent:IsA("Seat") or parent:IsA("VehicleSeat") or parent.Name:lower():find("seat")
+						if isSeat and obj.Enabled then
+							table.insert(nearbyPrompts, obj)
 						end
 					end
-				end
-				
-				if #nearbySeats > 0 then
-					-- Sort by distance (closest first)
-					table.sort(nearbySeats, function(a, b)
-						return a.distance < b.distance
-					end)
-					
-					local targetSeat = nearbySeats[1]
-					local seatType = targetSeat.object:IsA("ProximityPrompt") and "ProximityPrompt" or "ClickDetector"
-					
-					local delay = math.random(VEHICLE_SEAT_DELAY_MIN * 10, VEHICLE_SEAT_DELAY_MAX * 10) / 10
-					debugPrint("[VEHICLE] Found " .. seatType .. " seat! Entering in " .. string.format("%.1f", delay) .. "s")
-					task.wait(delay)
-					
-					if targetSeat and targetSeat.object.Enabled and targetSeated and not followerSeated then
-						local success = pcall(function()
-							if targetSeat.object:IsA("ClickDetector") then
-								targetSeat.object:Fire()
-								debugPrint("[VEHICLE] Clicked passenger seat!")
-							elseif targetSeat.object:IsA("ProximityPrompt") then
-								local holdTime = targetSeat.object.HoldDuration or 0
-								if holdTime > 0 then
-									targetSeat.object:InputHoldBegin()
-									task.wait(holdTime + 0.05)
-									targetSeat.object:InputHoldEnd()
-								else
-									targetSeat.object:InputHoldBegin()
-									task.wait(0.05)
-									targetSeat.object:InputHoldEnd()
-								end
-								debugPrint("[VEHICLE] Entered driver seat!")
-							end
-						end)
-						
-						if success then
-							debugPrint("[VEHICLE] Successfully entered vehicle!")
-							isInVehicle = true
-						else
-							debugPrint("[VEHICLE] Failed to enter seat")
-						end
-					end
-				else
-					debugPrint("[VEHICLE] Victim seated but no available seats found nearby")
 				end
 			end
 		end
-
-		-- Reset vehicle state when victim gets out
-		if not targetSeated and isInVehicle then
-			isInVehicle = false
-			vehicleSeatPrompt = nil
-			debugPrint("[VEHICLE] Victim exited vehicle")
+		
+		if #nearbyPrompts > 0 then
+			-- Pick the closest one
+			table.sort(nearbyPrompts, function(a, b)
+				return (a.Parent.Position - rootPart.Position).Magnitude < (b.Parent.Position - rootPart.Position).Magnitude
+			end)
+			vehicleSeatPrompt = nearbyPrompts[1]
+			
+			local delay = math.random(VEHICLE_SEAT_DELAY_MIN * 10, VEHICLE_SEAT_DELAY_MAX * 10) / 10
+			debugPrint("[VEHICLE] Found seat! Entering in " .. string.format("%.1f", delay) .. "s")
+			task.wait(delay)
+			
+			if vehicleSeatPrompt and vehicleSeatPrompt.Enabled and targetSeated and not followerSeated then
+				pcall(function()
+					vehicleSeatPrompt:InputHoldBegin()
+					task.wait(0.1)
+					vehicleSeatPrompt:InputHoldEnd()
+				end)
+				debugPrint("[VEHICLE] Entered vehicle!")
+				isInVehicle = true
+			end
+		else
+			debugPrint("[VEHICLE] Victim seated but no available seats found nearby")
 		end
+	end
+end
+
+-- Reset vehicle state when victim gets out
+if not targetSeated and isInVehicle then
+	isInVehicle = false
+	vehicleSeatPrompt = nil
+	debugPrint("[VEHICLE] Victim exited vehicle")
+end
 
 		local distance = (targetRoot.Position - rootPart.Position).Magnitude
 		local now = tick()
@@ -1118,6 +1295,39 @@ local function startFollowing()
 			end
 		end
 
+				-- ===== SOCIAL AWARENESS: Move if someone blocks the view =====
+		if SOCIAL_AWARENESS_ENABLED and staringActive and not isAdjustingPosition and not sillyActive then
+			local now = tick()
+			if now - lastBlockedCheck > 2 then  -- Check every 2 seconds
+				lastBlockedCheck = now
+				
+				local blocker, blockerPos = getBlockerInFront(rootPart, targetRoot)
+				if blocker then
+					debugPrint("[SOCIAL] " .. blocker.DisplayName .. " is blocking the view! Moving aside...")
+					
+					local newSpot = findClearSpot(rootPart, targetRoot, blockerPos)
+					if newSpot then
+						isAdjustingPosition = true
+						
+						-- Move to the new spot
+						local moveTime = 0
+						while moveTime < 1.5 do
+							if not targetRoot or not rootPart then break end
+							smoothMove(humanoid, newSpot)
+							if (rootPart.Position - newSpot).Magnitude < 1 then break end
+							task.wait(0.1)
+							moveTime = moveTime + 0.1
+						end
+						
+						isAdjustingPosition = false
+						debugPrint("[SOCIAL] Repositioned!")
+					else
+						debugPrint("[SOCIAL] Blocked but no clear spot available")
+					end
+				end
+			end
+		end
+
 		local wasMoving = victimIsMoving
 		if targetHumanoid then
 			if isVictimSeated(targetHumanoid) then
@@ -1133,7 +1343,6 @@ local function startFollowing()
 			if victimIsMoving then
 				victimHasMovedSinceStart = true
 				sillyJustCompleted = false
-				lastVictimPromptScan = 0 
 			end
 			
 			if not victimHasMovedSinceStart and distance <= ENTER_DISTANCE then
@@ -1187,37 +1396,33 @@ local function startFollowing()
 			victimStillTimer = 0
 		end
 
-				-- ===== INSTANT CLICK ON VICTIM'S PROMPTS (with 0.5s delay) =====
+								-- ===== VICTIM PROMPT CLICK (FOR DUET EMOTES - WITH COOLDOWN) =====
 		if RANDOM_CLICK_ENABLED and targetRoot and not sillyActive then
 			local now = tick()
-			if now - lastVictimPromptScan > 1 then  -- Scan every second
+			if now - lastVictimPromptScan > 5 then  -- Only scan every 5 seconds
 				lastVictimPromptScan = now
 				
-				-- Scan victim's character for prompts/click detectors
+				-- Scan victim's character for prompts
 				for _, obj in ipairs(targetChar:GetDescendants()) do
 					if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
 						local parent = obj.Parent
 						if parent and parent:IsA("BasePart") then
 							local dist = (parent.Position - rootPart.Position).Magnitude
-							if dist <= 10 then  -- Within 10 studs
-								debugPrint("[VICTIM CLICK] Found prompt on victim: " .. obj.Parent.Name .. " - clicking in 0.5s")
+							if dist <= 8 then  -- Within 8 studs
+								debugPrint("[DUET] Found prompt on victim: " .. obj.Parent.Name .. " - clicking in 0.5s")
 								
-								-- Wait 0.5 seconds before clicking
 								task.wait(0.5)
 								
-								-- Make sure we're still in range and victim still exists
 								if not targetChar or not targetChar.Parent then return end
 								local newDist = (parent.Position - rootPart.Position).Magnitude
-								if newDist > 10 then
-									debugPrint("[VICTIM CLICK] Victim moved too far, cancelling click")
+								if newDist > 8 then
+									debugPrint("[DUET] Victim moved too far, cancelling")
 									break
 								end
 								
-								-- Click it!
 								local success = pcall(function()
 									if obj:IsA("ClickDetector") then
 										obj:Fire()
-										debugPrint("[VICTIM CLICK] Fired ClickDetector on victim!")
 									elseif obj:IsA("ProximityPrompt") then
 										local holdTime = obj.HoldDuration or 0
 										if holdTime > 0 then
@@ -1229,26 +1434,13 @@ local function startFollowing()
 											task.wait(0.05)
 											obj:InputHoldEnd()
 										end
-										debugPrint("[VICTIM CLICK] Triggered ProximityPrompt on victim!")
 									end
 								end)
 								
 								if success then
-									-- Cancel silly mode after clicking victim
-									if sillyActive then
-										sillyActive = false
-										currentSillySequence = nil
-										debugPrint("[VICTIM CLICK] Cancelled silly mode")
-									end
-									victimStillTimer = 0
-									sillyJustCompleted = true
-									
-									-- Reset click timers to prevent spam
-									nextClickTime = 0
-									lastVictimPromptScan = now + 5  -- Don't scan again for 5 seconds
-									
-									debugPrint("[VICTIM CLICK] Success! Disabled further prompts for 5s")
-									break  -- Only click one thing per scan
+									debugPrint("Successfully clicked Victim's ProximityPrompt")
+									lastVictimPromptScan = now + 10  -- 10 second cooldown after success
+									break
 								end
 							end
 						end
@@ -1369,7 +1561,7 @@ local function startFollowing()
 				end
 			end
 			
-						-- ===== RANDOM CLICKING WHILE IN SIDE-STAND =====
+									-- ===== RANDOM CLICKING WHILE IN SIDE-STAND =====
 			if sideReached and RANDOM_CLICK_ENABLED then
 				local now = tick()
 				
@@ -1395,6 +1587,10 @@ local function startFollowing()
 				if nextClickTime > 0 and now >= nextClickTime and #clickablesCache > 0 then
 					local clickSuccess = clickRandomObject()
 					
+					-- CLEAR THE CACHE IMMEDIATELY to prevent multiple clicks
+					clickablesCache = {}
+					nextClickTime = 0
+					
 					if clickSuccess then
 						-- Cancel silly mode after successful click
 						if sillyActive then
@@ -1403,19 +1599,11 @@ local function startFollowing()
 							debugPrint("[CLICK] Cancelled silly mode due to click")
 						end
 						
-						-- Reset silly timers so it doesn't trigger while victim is still nearby
 						victimStillTimer = 0
-						sillyJustCompleted = true  -- Prevents silly from triggering until victim moves
-						
+						sillyJustCompleted = true
 						debugPrint("[CLICK] Disabled silly mode until victim moves away")
-						
-						-- Don't schedule another click - wait for victim to move
-						nextClickTime = 0
 					else
-						-- Click failed, try again after delay
-						local delay = math.random(MIN_CLICK_DELAY * 10, MAX_CLICK_DELAY * 10) / 10
-						nextClickTime = now + delay
-						debugPrint("[CLICK] Click failed, next attempt in " .. string.format("%.1f", delay) .. "s")
+						debugPrint("[CLICK] Click failed, will try again later")
 					end
 				end
 			end
@@ -1471,6 +1659,11 @@ local function startFollowing()
 			end
 			
 			if needRecompute and (now - lastPathUpdate) < 2.0 then
+				needRecompute = false
+			end
+			
+			-- Prevent path spam - only compute every 0.5 seconds max
+			if needRecompute and (now - lastPathUpdate) < 0.5 then
 				needRecompute = false
 			end
 
