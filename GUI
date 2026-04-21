@@ -1,9 +1,7 @@
--- Advanced Follower GUI (Simple Pathfinding + Smooth Movement + Anti-Void + Silly Behavior + Camera Track + Debug)
--- REMOVED: Recorded mode, fallback system, auto-switch
--- KEPT: Manual movement detection, silly sequences, anti-void
--- ADDED: Stuck detection during silly behavior (forces side-stand after 3s)
--- ADDED: Camera tracking (5-40 studs, smooth follow)
--- ADDED: Debug toggle button
+-- Advanced Follower GUI (Simple Pathfinding + Smooth Movement + Anti-Void + Silly Behavior + Camera Track + Debug + Sprint)
+-- FIXED: W release when inside 8 studs
+-- FIXED: Shift spam - only taps ONCE for crouch or shiftlock
+-- FIXED: Pathfinding indentation
 
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
@@ -11,6 +9,7 @@ local RunService = game:GetService("RunService")
 local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local PlayerGui = player:WaitForChild("PlayerGui", 5)
 if not PlayerGui then
@@ -172,12 +171,11 @@ local SILLY_SEQUENCES = {
 --  Settings
 -- ══════════════════════════════════════════════
 local EXIT_DISTANCE                = 8
-local ENTER_DISTANCE               = 4
+local ENTER_DISTANCE               = 8
 local PATH_UPDATE_INTERVAL         = 0.3
 local SIDE_OFFSET                  = 4
 local WAYPOINT_RADIUS              = 8
 local DIRECT_MOVE_DISTANCE         = 15
-local MANUAL_CONTROL_COOLDOWN      = 0.5
 
 -- Silly Settings
 local SILLY_ENABLED                = true
@@ -194,11 +192,15 @@ local safetyCache                  = {}
 -- Camera Settings
 local CAMERA_ENABLED               = true
 local CAMERA_TRACK_MIN             = 5
-local CAMERA_TRACK_MAX             = 40
+local CAMERA_TRACK_MAX             = 80
 local CAMERA_SMOOTHNESS            = 0.12
 
 -- Debug Settings
 local DEBUG_ENABLED                = false
+
+-- Sprint Settings
+local SPRINT_ENABLED               = true
+local SPRINT_DISTANCE              = 20
 
 -- ══════════════════════════════════════════════
 --  GUI
@@ -217,20 +219,25 @@ MainFrame.Parent = ScreenGui
 MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
 MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
 MainFrame.Size = UDim2.new(0, 340, 0, 340)
-MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 MainFrame.BorderSizePixel = 0
+MainFrame.BackgroundTransparency = 0
+MainFrame.ClipsDescendants = true
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 12)
+MainCorner.Parent = MainFrame
+
 MainFrame.Active = true
 MainFrame.Draggable = true
 
-local Corner = Instance.new("UICorner")
-Corner.CornerRadius = UDim.new(0, 12)
-Corner.Parent = MainFrame
-
 local Header = Instance.new("Frame")
+Header.Name = "Header"
 Header.Parent = MainFrame
 Header.Size = UDim2.new(1, 0, 0, 40)
-Header.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+Header.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
 Header.BorderSizePixel = 0
+Header.BackgroundTransparency = 0
 
 local HeaderCorner = Instance.new("UICorner")
 HeaderCorner.CornerRadius = UDim.new(0, 12)
@@ -252,7 +259,7 @@ MinimizeButton.Parent = Header
 MinimizeButton.AnchorPoint = Vector2.new(1, 0.5)
 MinimizeButton.Position = UDim2.new(1, -8, 0.5, 0)
 MinimizeButton.Size = UDim2.new(0, 28, 0, 28)
-MinimizeButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+MinimizeButton.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
 MinimizeButton.BorderSizePixel = 0
 MinimizeButton.Font = Enum.Font.GothamBold
 MinimizeButton.Text = "−"
@@ -277,7 +284,7 @@ SearchLabel.Size = UDim2.new(1, -24, 0, 20)
 SearchLabel.BackgroundTransparency = 1
 SearchLabel.Font = Enum.Font.Gotham
 SearchLabel.Text = "Username or Display Name"
-SearchLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
+SearchLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
 SearchLabel.TextSize = 12
 SearchLabel.TextXAlignment = Enum.TextXAlignment.Left
 
@@ -285,7 +292,7 @@ local SearchContainer = Instance.new("Frame")
 SearchContainer.Parent = Content
 SearchContainer.Position = UDim2.new(0, 12, 0, 30)
 SearchContainer.Size = UDim2.new(1, -24, 0, 36)
-SearchContainer.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+SearchContainer.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
 SearchContainer.BorderSizePixel = 0
 
 local SearchCorner = Instance.new("UICorner")
@@ -380,7 +387,7 @@ local DebugButton = Instance.new("TextButton")
 DebugButton.Parent = Content
 DebugButton.Position = UDim2.new(0, 12, 0, 218)
 DebugButton.Size = UDim2.new(1, -24, 0, 36)
-DebugButton.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+DebugButton.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
 DebugButton.BorderSizePixel = 0
 DebugButton.Font = Enum.Font.GothamBold
 DebugButton.Text = "Debug: OFF"
@@ -399,7 +406,7 @@ Status.Size = UDim2.new(1, -24, 0, 28)
 Status.BackgroundTransparency = 1
 Status.Font = Enum.Font.Gotham
 Status.Text = "Ready"
-Status.TextColor3 = Color3.fromRGB(200, 200, 200)
+Status.TextColor3 = Color3.fromRGB(180, 180, 190)
 Status.TextSize = 13
 Status.TextXAlignment = Enum.TextXAlignment.Center
 
@@ -409,7 +416,6 @@ MinimizeButton.MouseButton1Click:Connect(function()
 	Content.Visible = not minimized
 	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 340)
 	MinimizeButton.Text = minimized and "+" or "−"
-	MainFrame.Draggable = not minimized
 end)
 
 -- ══════════════════════════════════════════════
@@ -424,11 +430,7 @@ local currentSide = nil
 local sideTargetPosition = nil
 local sideReached = false
 
-local lastSeatExitTime = 0
 local lastStatusUpdate = 0
-
-local manualControlActive = false
-local lastInputTime = 0
 
 local sillyActive = false
 local sillyIndex = 1
@@ -451,27 +453,21 @@ local stareDelayStart = nil
 
 local lastSillyIndex = 0
 
+-- Sprint State
+local isSprinting = false
+local isHoldingW = false
+local shiftIsSprint = true
+local shiftTested = false
+local testPhase = 0
+local testStartTime = 0
+local testSpeedBefore = 0
+local SHIFT_TEST_COUNT = 3
+local testSamples = {}
+local shiftTapDone = false  -- Prevent double tapping
+
 local function debugPrint(...)
 	if DEBUG_ENABLED then
 		print("[DEBUG]", ...)
-	end
-end
-
-local function checkManualMovement()
-	local char = player.Character
-	if not char then return false end
-	local hum = char:FindFirstChild("Humanoid")
-	if not hum then return false end
-	local moving = hum.MoveDirection.Magnitude > 0.5
-	if moving then
-		manualControlActive = true
-		lastInputTime = tick()
-		return true
-	else
-		if manualControlActive and (tick() - lastInputTime) > MANUAL_CONTROL_COOLDOWN then
-			manualControlActive = false
-		end
-		return false
 	end
 end
 
@@ -531,7 +527,6 @@ end
 
 local function smoothMove(humanoid, targetPos)
 	if not humanoid or not targetPos then return end
-	if manualControlActive then return end
 	pcall(function() 
 		humanoid:MoveTo(targetPos) 
 	end)
@@ -571,6 +566,132 @@ local function isVictimSeated(targetHumanoid)
 	return targetHumanoid.Sit or (targetHumanoid.SeatPart ~= nil)
 end
 
+-- ══════════════════════════════════════════════
+--  Sprint System with Crouch Detection
+-- ══════════════════════════════════════════════
+local function holdW(enable)
+	if enable == isHoldingW then return end
+	isHoldingW = enable
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(enable, Enum.KeyCode.W, false, game)
+	end)
+end
+
+local function setSprint(enable)
+	if not SPRINT_ENABLED then return end
+	if not shiftIsSprint then return end
+	if enable == isSprinting then return end
+	
+	isSprinting = enable
+	holdW(enable)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(enable, Enum.KeyCode.LeftShift, false, game)
+	end)
+	debugPrint("[SPRINT] " .. (enable and "ON" or "OFF"))
+end
+
+local function testSprintBehavior(character)
+	if testPhase ~= 0 then return end
+	if shiftTested then return end
+	
+	local humanoid = character:FindFirstChild("Humanoid")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not rootPart then return end
+	if humanoid.FloorMaterial == Enum.Material.Air then return end
+	
+	testPhase = 1
+	testSpeedBefore = rootPart.Velocity.Magnitude
+	testStartTime = tick()
+	
+	holdW(true)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+	end)
+	
+	debugPrint("[SPRINT TEST] Testing if Shift is sprint or crouch...")
+end
+
+local function updateSprintTest(character)
+	if testPhase == 0 then return end
+	
+	local humanoid = character:FindFirstChild("Humanoid")
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not rootPart then
+		testPhase = 0
+		return
+	end
+	
+	local now = tick()
+	
+	if testPhase == 1 and (now - testStartTime) >= 0.3 then
+		local speedAfter = rootPart.Velocity.Magnitude
+		
+		pcall(function()
+			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+		end)
+		holdW(false)
+		
+		local result = "unknown"
+		if speedAfter > testSpeedBefore + 2 then
+			result = "sprint"
+			table.insert(testSamples, "sprint")
+		elseif speedAfter < testSpeedBefore - 2 then
+			result = "crouch"
+			table.insert(testSamples, "crouch")
+		else
+			result = "none"
+			table.insert(testSamples, "none")
+		end
+		
+		debugPrint("[SPRINT TEST] Sample " .. #testSamples .. ": " .. result)
+		
+		if #testSamples >= SHIFT_TEST_COUNT then
+			shiftTested = true
+			local sprintCount = 0
+			local crouchCount = 0
+			local noneCount = 0
+			
+			for _, v in ipairs(testSamples) do
+				if v == "sprint" then sprintCount = sprintCount + 1
+				elseif v == "crouch" then crouchCount = crouchCount + 1
+				else noneCount = noneCount + 1
+				end
+			end
+			
+			if sprintCount >= SHIFT_TEST_COUNT / 2 then
+				shiftIsSprint = true
+				print("[SPRINT] Detection complete - SPRINT enabled")
+			elseif crouchCount >= SHIFT_TEST_COUNT / 2 then
+				shiftIsSprint = false
+				if not shiftTapDone then
+					shiftTapDone = true
+					print("[SPRINT] Detection complete - CROUCH detected, tapping Shift once to stand up")
+					task.wait(0.1)
+					pcall(function()
+						VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+						task.wait(0.05)
+						VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+					end)
+				end
+			else
+				shiftIsSprint = false
+				if not shiftTapDone then
+					shiftTapDone = true
+					print("[SPRINT] Detection complete - NO sprint mechanics, tapping Shift once for Shift Lock")
+					pcall(function()
+						VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+						task.wait(0.05)
+						VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+					end)
+				end
+			end
+			testPhase = 0
+		else
+			testPhase = 0
+		end
+	end
+end
+
 local function stopFollowing()
 	print("============================================")
 	print("[STOP] Stopping follow")
@@ -581,7 +702,6 @@ local function stopFollowing()
 	currentSide = nil
 	sideTargetPosition = nil
 	sideReached = false
-	manualControlActive = false
 
 	sillyActive = false
 	victimIsMoving = false
@@ -604,14 +724,16 @@ local function stopFollowing()
 			pcall(function() hum:MoveTo(hum.Parent.HumanoidRootPart.Position) end)
 		end
 	end
+	setSprint(false)
+	holdW(false)
 	Status.Text = "Stopped"
-	Status.TextColor3 = Color3.fromRGB(200, 200, 200)
+	Status.TextColor3 = Color3.fromRGB(180, 180, 190)
 end
 
 local function toggleSillyMode()
 	SILLY_ENABLED = not SILLY_ENABLED
 	SillyButton.Text = SILLY_ENABLED and "Silly Mode: ON" or "Silly Mode: OFF"
-	SillyButton.BackgroundColor3 = SILLY_ENABLED and Color3.fromRGB(255, 100, 150) or Color3.fromRGB(60, 60, 70)
+	SillyButton.BackgroundColor3 = SILLY_ENABLED and Color3.fromRGB(255, 100, 150) or Color3.fromRGB(50, 50, 60)
 	print("[SILLY] Mode:", SILLY_ENABLED and "ON" or "OFF")
 	if not SILLY_ENABLED then
 		sillyActive = false
@@ -622,14 +744,14 @@ end
 local function toggleCameraMode()
 	CAMERA_ENABLED = not CAMERA_ENABLED
 	CameraButton.Text = CAMERA_ENABLED and "Camera Track: ON" or "Camera Track: OFF"
-	CameraButton.BackgroundColor3 = CAMERA_ENABLED and Color3.fromRGB(100, 150, 255) or Color3.fromRGB(60, 60, 70)
+	CameraButton.BackgroundColor3 = CAMERA_ENABLED and Color3.fromRGB(100, 150, 255) or Color3.fromRGB(50, 50, 60)
 	print("[CAMERA] Mode:", CAMERA_ENABLED and "ON" or "OFF")
 end
 
 local function toggleDebugMode()
 	DEBUG_ENABLED = not DEBUG_ENABLED
 	DebugButton.Text = DEBUG_ENABLED and "Debug: ON" or "Debug: OFF"
-	DebugButton.BackgroundColor3 = DEBUG_ENABLED and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(60, 60, 70)
+	DebugButton.BackgroundColor3 = DEBUG_ENABLED and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(50, 50, 60)
 	print("[DEBUG] Mode:", DEBUG_ENABLED and "ON" or "OFF")
 end
 
@@ -661,7 +783,7 @@ local function isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
 end
 
 -- ══════════════════════════════════════════════
---  Main follow loop (simple pathfinding)
+--  Main follow loop
 -- ══════════════════════════════════════════════
 local function startFollowing()
 	if followConnection then followConnection:Disconnect() end
@@ -682,6 +804,12 @@ local function startFollowing()
 	currentSillySequence = nil
 	sillyLastPosition = nil
 	sillyStuckTimer = 0
+	
+	shiftTested = false
+	testPhase = 0
+	testSamples = {}
+	shiftIsSprint = true
+	shiftTapDone = false
 
 	print("============================================")
 	print("[START] Following: " .. targetPlayer.Name)
@@ -692,7 +820,6 @@ local function startFollowing()
 
 	followConnection = RunService.RenderStepped:Connect(function(deltaTime)
 		pruneSafetyCache()
-		checkManualMovement()
 
 		if not isFollowing or not targetPlayer or not targetPlayer.Parent then
 			if targetPlayer and not targetPlayer.Parent then
@@ -729,11 +856,13 @@ local function startFollowing()
 		if distance > EXIT_DISTANCE and previousDistance <= EXIT_DISTANCE then
 			debugPrint("[RADIUS] EXITED 8 stud radius - Distance: " .. math.floor(distance) .. " studs")
 		elseif distance <= ENTER_DISTANCE and previousDistance > ENTER_DISTANCE then
-			debugPrint("[RADIUS] ENTERED 4 stud radius - Distance: " .. math.floor(distance) .. " studs")
+			debugPrint("[RADIUS] ENTERED 8 stud radius - Distance: " .. math.floor(distance) .. " studs")
 		end
 		previousDistance = distance
+		
+		updateSprintTest(character)
 
-		-- ===== CAMERA TRACKING (Manual Override + 0.5s Delay) =====
+		-- ===== CAMERA TRACKING =====
 		if CAMERA_ENABLED and targetRoot then
 			local camera = workspace.CurrentCamera
 			if camera then
@@ -830,10 +959,9 @@ local function startFollowing()
 
 		if now - lastStatusUpdate > 0.2 then
 			lastStatusUpdate = now
-			local manual = manualControlActive and " [MANUAL]" or ""
 			local silly = sillyActive and " [SILLY]" or ""
 			local cam = (CAMERA_ENABLED and distance > CAMERA_TRACK_MIN and distance <= CAMERA_TRACK_MAX) and " [CAM]" or ""
-			Status.Text = string.format("%s%s%s%s (%.0f)", targetPlayer.DisplayName, manual, silly, cam, distance)
+			Status.Text = string.format("%s%s%s (%.0f)", targetPlayer.DisplayName, silly, cam, distance)
 			Status.TextColor3 = Color3.fromRGB(100, 200, 255)
 		end
 
@@ -956,8 +1084,10 @@ local function startFollowing()
 
 		if not inSideStand and not victimIsMoving and distance <= ENTER_DISTANCE and victimHasMovedSinceStart then
 			if not sillyActive and victimStillTimer < 8 and not sillyJustCompleted then
-				debugPrint("[SIDE] Entering side-stand (inside 4 studs, victim stopped)")
+				debugPrint("[SIDE] Entering side-stand (inside 8 studs, victim stopped)")
 				inSideStand = true
+				holdW(false)
+				setSprint(false)
 				sideReached = false
 				currentSide = (math.random(1, 2) == 1) and "left" or "right"
 				local sidePos = getSidePosition(targetRoot, currentSide).Position
@@ -984,98 +1114,115 @@ local function startFollowing()
 			return
 		end
 
-		-- ===== CHASE WHEN OUTSIDE 8 STUDS (optimized pathfinding) =====
+		-- ===== CHASE WHEN OUTSIDE 8 STUDS =====
 		if distance > EXIT_DISTANCE then
-			if not manualControlActive then
-				if distance < DIRECT_MOVE_DISTANCE then
-					if isSafePosition(targetRoot.Position) then
-						smoothMove(humanoid, targetRoot.Position)
-					else
-						smoothMove(humanoid, rootPart.Position)
-					end
-					currentPath = nil
-					return
+			holdW(true)
+			
+						if distance >= SPRINT_DISTANCE and not shiftTested and testPhase == 0 then
+				testSprintBehavior(character)
+			end
+			
+			if distance >= SPRINT_DISTANCE and shiftTested and shiftIsSprint then
+				setSprint(true)
+			elseif distance <= 10 then
+				setSprint(false)
+			end
+			
+			if distance < DIRECT_MOVE_DISTANCE then
+				if isSafePosition(targetRoot.Position) then
+					smoothMove(humanoid, targetRoot.Position)
+				else
+					smoothMove(humanoid, rootPart.Position)
 				end
+				currentPath = nil
+				return
+			end
 
-				local needRecompute = false
-				if not currentPath then
+			local needRecompute = false
+			if not currentPath then
+				needRecompute = true
+				debugPrint("[PATH] Computing initial path")
+			elseif lastPathTarget then
+				local targetDrift = (targetRoot.Position - lastPathTarget).Magnitude
+				if targetDrift > 20 then
 					needRecompute = true
-					debugPrint("[PATH] Computing initial path")
-				elseif lastPathTarget then
-					local targetDrift = (targetRoot.Position - lastPathTarget).Magnitude
-					if targetDrift > 8 then
-						needRecompute = true
-						debugPrint("[PATH] Recomputing - target moved " .. math.floor(targetDrift) .. " studs")
+					debugPrint("[PATH] Recomputing - target moved " .. math.floor(targetDrift) .. " studs")
+				end
+			end
+
+			if needRecompute and (now - lastPathUpdate) < 0.5 then
+				needRecompute = false
+			end
+
+			if needRecompute then
+				lastPathUpdate = now
+				if isSafePosition(targetRoot.Position) then
+					local path = PathfindingService:CreatePath({
+						AgentRadius = 2,
+						AgentHeight = 5,
+						AgentCanJump = true,
+						AgentJumpHeight = 7.5,
+						AgentMaxSlope = 45,
+						WaypointSpacing = 4,
+					})
+					local success = pcall(function()
+						path:ComputeAsync(rootPart.Position, targetRoot.Position)
+					end)
+					if success and path.Status == Enum.PathStatus.Success then
+						currentPath = path
+						currentWaypointIndex = 1
+						lastPathTarget = targetRoot.Position
+						debugPrint("[PATH] Path computed successfully with " .. #path:GetWaypoints() .. " waypoints")
+					else
+						currentPath = nil
+						debugPrint("[PATH] Path computation failed")
+					end
+				else
+					currentPath = nil
+				end
+			end
+
+			if currentPath then
+				local waypoints = currentPath:GetWaypoints()
+				
+				while currentWaypointIndex <= #waypoints do
+					local wp = waypoints[currentWaypointIndex]
+					if (rootPart.Position - wp.Position).Magnitude < WAYPOINT_RADIUS then
+						currentWaypointIndex = currentWaypointIndex + 1
+					else
+						break
 					end
 				end
-
-				if needRecompute and (now - lastPathUpdate) < 0.5 then
-					needRecompute = false
-				end
-
-				if needRecompute then
-					lastPathUpdate = now
-					if isSafePosition(targetRoot.Position) then
-						local path = PathfindingService:CreatePath({
-							AgentRadius = 2,
-							AgentHeight = 5,
-							AgentCanJump = true,
-							AgentJumpHeight = 7.5,
-							AgentMaxSlope = 45,
-							WaypointSpacing = 4,
-						})
-						local success = pcall(function()
-							path:ComputeAsync(rootPart.Position, targetRoot.Position)
-						end)
-						if success and path.Status == Enum.PathStatus.Success then
-							currentPath = path
-							currentWaypointIndex = 1
-							lastPathTarget = targetRoot.Position
-							debugPrint("[PATH] Path computed successfully with " .. #path:GetWaypoints() .. " waypoints")
-						else
-							currentPath = nil
-							debugPrint("[PATH] Path computation failed")
+				
+				if currentWaypointIndex <= #waypoints then
+					local waypoint = waypoints[currentWaypointIndex]
+					if isSafePosition(waypoint.Position) then
+						smoothMove(humanoid, waypoint.Position)
+						if waypoint.Action == Enum.PathWaypointAction.Jump then
+							humanoid.Jump = true
 						end
 					else
+						currentWaypointIndex = currentWaypointIndex + 1
+					end
+				else
+					if distance > DIRECT_MOVE_DISTANCE then
 						currentPath = nil
 					end
 				end
-
-				if currentPath then
-					local waypoints = currentPath:GetWaypoints()
-					
-					while currentWaypointIndex <= #waypoints do
-						local wp = waypoints[currentWaypointIndex]
-						if (rootPart.Position - wp.Position).Magnitude < WAYPOINT_RADIUS then
-							currentWaypointIndex = currentWaypointIndex + 1
-						else
-							break
-						end
-					end
-					
-					if currentWaypointIndex <= #waypoints then
-						local waypoint = waypoints[currentWaypointIndex]
-						if isSafePosition(waypoint.Position) then
-							smoothMove(humanoid, waypoint.Position)
-							if waypoint.Action == Enum.PathWaypointAction.Jump then
-								humanoid.Jump = true
-							end
-						else
-							currentWaypointIndex = currentWaypointIndex + 1
-						end
-					else
-						if distance > DIRECT_MOVE_DISTANCE then
-							currentPath = nil
-						end
-					end
+			else
+				if isSafePosition(targetRoot.Position) then
+					smoothMove(humanoid, targetRoot.Position)
 				else
-					if isSafePosition(targetRoot.Position) then
-						smoothMove(humanoid, targetRoot.Position)
-					else
-						smoothMove(humanoid, rootPart.Position)
-					end
+					smoothMove(humanoid, rootPart.Position)
 				end
 			end
+		else
+			if not isSprinting then
+				holdW(false)
+			end
+			pcall(function()
+				VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+			end)
 		end
 	end)
 end
@@ -1110,9 +1257,8 @@ end)
 CancelButton.MouseButton1Click:Connect(function()
 	print("[CANCEL] Stopped by user")
 	stopFollowing()
-	SearchBar.Text = ""
 	Status.Text = "Ready"
-	Status.TextColor3 = Color3.fromRGB(200, 200, 200)
+	Status.TextColor3 = Color3.fromRGB(180, 180, 190)
 end)
 
 SillyButton.MouseButton1Click:Connect(toggleSillyMode)
@@ -1134,9 +1280,15 @@ player.CharacterAdded:Connect(function()
 		sillyLastPosition = nil
 		sillyStuckTimer = 0
 	end
+	shiftTested = false
+	testPhase = 0
+	testSamples = {}
+	shiftIsSprint = true
+	shiftTapDone = false
 end)
 
 print("=== Follower Script Ready ===")
 print("[SILLY] Loaded " .. #SILLY_SEQUENCES .. " movements (MVs)")
 print("[CAMERA] Track range: " .. CAMERA_TRACK_MIN .. "-" .. CAMERA_TRACK_MAX .. " studs")
 print("[DEBUG] Debug mode available - click Debug button to toggle")
+print("[SPRINT] Auto-detects crouch vs sprint - enables at " .. SPRINT_DISTANCE .. "+ studs, stops at 10 studs")
