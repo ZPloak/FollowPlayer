@@ -175,7 +175,9 @@ local ENTER_DISTANCE               = 8
 local PATH_UPDATE_INTERVAL         = 0.3
 local SIDE_OFFSET                  = 4
 local WAYPOINT_RADIUS              = 8
-local DIRECT_MOVE_DISTANCE         = 15
+local DIRECT_MOVE_DISTANCE         = 10
+local W_RELEASE_DISTANCE           = 4
+
 
 -- Silly Settings
 local SILLY_ENABLED                = true
@@ -192,7 +194,7 @@ local safetyCache                  = {}
 -- Camera Settings
 local CAMERA_ENABLED               = true
 local CAMERA_TRACK_MIN             = 5
-local CAMERA_TRACK_MAX             = 80
+local CAMERA_TRACK_MAX             = 150
 local CAMERA_SMOOTHNESS            = 0.12
 
 -- Debug Settings
@@ -201,6 +203,18 @@ local DEBUG_ENABLED                = false
 -- Sprint Settings
 local SPRINT_ENABLED               = true
 local SPRINT_DISTANCE              = 20
+
+-- Random Click Settings
+local RANDOM_CLICK_ENABLED         = true
+local CLICK_SEARCH_RADIUS          = 15
+local MIN_CLICK_DELAY              = 1
+local MAX_CLICK_DELAY              = 10
+
+-- Vehicle Follow Settings
+local VEHICLE_FOLLOW_ENABLED      = true
+local VEHICLE_SEAT_DELAY_MIN      = 0.5
+local VEHICLE_SEAT_DELAY_MAX      = 2.0
+local VEHICLE_SEARCH_RADIUS       = 20
 
 -- ══════════════════════════════════════════════
 --  GUI
@@ -461,9 +475,19 @@ local shiftTested = false
 local testPhase = 0
 local testStartTime = 0
 local testSpeedBefore = 0
-local SHIFT_TEST_COUNT = 3
+local SHIFT_TEST_COUNT = 5
 local testSamples = {}
-local shiftTapDone = false  -- Prevent double tapping
+local shiftTapDone = false
+
+local nextClickTime = 0
+local clickablesCache = {}
+local lastClickableScan = 0
+
+local isInVehicle = false
+local vehicleSeatPrompt = nil
+local lastVehicleScan = 0
+
+local lastVictimPromptScan = 0
 
 local function debugPrint(...)
 	if DEBUG_ENABLED then
@@ -479,23 +503,31 @@ local function cacheKey(pos)
 	return math.floor(pos.X / CACHE_GRID) .. "," .. math.floor(pos.Y / CACHE_GRID) .. "," .. math.floor(pos.Z / CACHE_GRID)
 end
 
-local function makeRaycastParams()
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	local ignoreList = {}
-	for _, plr in ipairs(Players:GetPlayers()) do
-		local char = plr.Character
-		if char then
-			table.insert(ignoreList, char)
-			for _, child in ipairs(char:GetDescendants()) do
-				if child:IsA("BasePart") then
-					table.insert(ignoreList, child)
+local lastIgnoreListUpdate = 0
+local cachedRaycastParams = nil
+
+local function getRaycastParams()
+	local now = tick()
+	if not cachedRaycastParams or (now - lastIgnoreListUpdate) > 2 then
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		local ignoreList = {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			local char = plr.Character
+			if char then
+				table.insert(ignoreList, char)
+				for _, child in ipairs(char:GetDescendants()) do
+					if child:IsA("BasePart") then
+						table.insert(ignoreList, child)
+					end
 				end
 			end
 		end
+		params.FilterDescendantsInstances = ignoreList
+		cachedRaycastParams = params
+		lastIgnoreListUpdate = now
 	end
-	params.FilterDescendantsInstances = ignoreList
-	return params
+	return cachedRaycastParams
 end
 
 local function isSafePosition(pos)
@@ -509,7 +541,7 @@ local function isSafePosition(pos)
 	end
 	local origin = Vector3.new(pos.X, pos.Y + 3, pos.Z)
 	local direction = Vector3.new(0, -(SAFE_GROUND_MAX_DROP + 3), 0)
-	local result = Workspace:Raycast(origin, direction, makeRaycastParams())
+	local result = Workspace:Raycast(origin, direction, getRaycastParams())
 	local safe = result ~= nil
 	safetyCache[key] = { safe = safe, t = now }
 	return safe
@@ -572,9 +604,12 @@ end
 local function holdW(enable)
 	if enable == isHoldingW then return end
 	isHoldingW = enable
-	pcall(function()
+	local success = pcall(function()
 		VirtualInputManager:SendKeyEvent(enable, Enum.KeyCode.W, false, game)
 	end)
+	if DEBUG_ENABLED then
+		print("[KEY] W " .. (enable and "DOWN" or "UP") .. " - Success: " .. tostring(success))
+	end
 end
 
 local function setSprint(enable)
@@ -584,10 +619,12 @@ local function setSprint(enable)
 	
 	isSprinting = enable
 	holdW(enable)
-	pcall(function()
+	local success = pcall(function()
 		VirtualInputManager:SendKeyEvent(enable, Enum.KeyCode.LeftShift, false, game)
 	end)
-	debugPrint("[SPRINT] " .. (enable and "ON" or "OFF"))
+	if DEBUG_ENABLED then
+		print("[KEY] Shift " .. (enable and "DOWN" or "UP") .. " - Success: " .. tostring(success))
+	end
 end
 
 local function testSprintBehavior(character)
@@ -603,12 +640,11 @@ local function testSprintBehavior(character)
 	testSpeedBefore = rootPart.Velocity.Magnitude
 	testStartTime = tick()
 	
+	print("[SPRINT TEST] Holding W + Shift - check if character speeds up!")
 	holdW(true)
 	pcall(function()
 		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
 	end)
-	
-	debugPrint("[SPRINT TEST] Testing if Shift is sprint or crouch...")
 end
 
 local function updateSprintTest(character)
@@ -623,7 +659,7 @@ local function updateSprintTest(character)
 	
 	local now = tick()
 	
-	if testPhase == 1 and (now - testStartTime) >= 0.3 then
+	if testPhase == 1 and (now - testStartTime) >= 1.5 then
 		local speedAfter = rootPart.Velocity.Magnitude
 		
 		pcall(function()
@@ -632,10 +668,10 @@ local function updateSprintTest(character)
 		holdW(false)
 		
 		local result = "unknown"
-		if speedAfter > testSpeedBefore + 2 then
+		if speedAfter > testSpeedBefore + 0.5 then
 			result = "sprint"
 			table.insert(testSamples, "sprint")
-		elseif speedAfter < testSpeedBefore - 2 then
+		elseif speedAfter < testSpeedBefore - 0.5 then
 			result = "crouch"
 			table.insert(testSamples, "crouch")
 		else
@@ -782,6 +818,59 @@ local function isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
 	return dotProduct > 0.94
 end
 
+-- Function: Find all clickable objects nearby
+local function scanClickables(centerPos)
+	local found = {}
+	for _, obj in ipairs(Workspace:GetDescendants()) do
+		if obj:IsA("ClickDetector") or obj:IsA("ProximityPrompt") then
+			local parent = obj.Parent
+			if parent and parent:IsA("BasePart") then
+				if (parent.Position - centerPos).Magnitude <= CLICK_SEARCH_RADIUS then
+					table.insert(found, obj)
+				end
+			end
+		end
+	end
+	return found
+end
+
+-- Function: Click a random object from the cache
+local function clickRandomObject()
+	if #clickablesCache == 0 then 
+		debugPrint("[CLICK] No clickables in cache")
+		return false 
+	end
+	
+	local target = clickablesCache[math.random(1, #clickablesCache)]
+	local success = pcall(function()
+		if target:IsA("ClickDetector") then
+			target:Fire()
+			debugPrint("[CLICK] Fired ClickDetector: " .. target.Parent.Name)
+		elseif target:IsA("ProximityPrompt") then
+			local holdTime = target.HoldDuration or 0
+			if holdTime > 0 then
+				debugPrint("[CLICK] Holding ProximityPrompt for " .. holdTime .. "s")
+				target:InputHoldBegin()
+				task.wait(holdTime + 0.05)
+				target:InputHoldEnd()
+			else
+				target:InputHoldBegin()
+				task.wait(0.05)
+				target:InputHoldEnd()
+			end
+			debugPrint("[CLICK] Triggered ProximityPrompt: " .. target.Parent.Name)
+		end
+	end)
+	
+	if success then
+		debugPrint("[CLICK] Click successful!")
+	else
+		debugPrint("[CLICK] Click failed :(")
+	end
+	
+	return success
+end
+
 -- ══════════════════════════════════════════════
 --  Main follow loop
 -- ══════════════════════════════════════════════
@@ -848,6 +937,96 @@ local function startFollowing()
 			humanoid.Jump = true
 			debugPrint("[ANTI-SEAT] Forcing exit from seat")
 			Status.Text = "Getting off seat"
+		end
+
+				-- ===== VEHICLE FOLLOW: Enter seat when victim is seated =====
+		if VEHICLE_FOLLOW_ENABLED and targetSeated and not followerSeated and not sillyActive then
+			local now = tick()
+			
+			-- Only check every 2 seconds to avoid spam
+			if now - lastVehicleScan > 2 then
+				lastVehicleScan = now
+				
+				-- Find nearby seats with ANY type of interaction
+				local nearbySeats = {}
+				for _, obj in ipairs(Workspace:GetDescendants()) do
+					if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
+						local parent = obj.Parent
+						if parent and parent:IsA("BasePart") then
+							local dist = (parent.Position - rootPart.Position).Magnitude
+							if dist <= VEHICLE_SEARCH_RADIUS then
+								-- Check if it's a seat
+								local isSeat = parent:IsA("Seat") or parent:IsA("VehicleSeat") or parent.Name:lower():find("seat")
+								if isSeat and obj.Enabled then
+									-- Check if seat is NOT occupied (skip if victim is in it)
+									local seatOccupied = false
+									if parent:IsA("Seat") or parent:IsA("VehicleSeat") then
+										seatOccupied = (parent.Occupant ~= nil)
+									end
+									if not seatOccupied then
+										table.insert(nearbySeats, {
+											object = obj,
+											distance = dist,
+											part = parent
+										})
+									end
+								end
+							end
+						end
+					end
+				end
+				
+				if #nearbySeats > 0 then
+					-- Sort by distance (closest first)
+					table.sort(nearbySeats, function(a, b)
+						return a.distance < b.distance
+					end)
+					
+					local targetSeat = nearbySeats[1]
+					local seatType = targetSeat.object:IsA("ProximityPrompt") and "ProximityPrompt" or "ClickDetector"
+					
+					local delay = math.random(VEHICLE_SEAT_DELAY_MIN * 10, VEHICLE_SEAT_DELAY_MAX * 10) / 10
+					debugPrint("[VEHICLE] Found " .. seatType .. " seat! Entering in " .. string.format("%.1f", delay) .. "s")
+					task.wait(delay)
+					
+					if targetSeat and targetSeat.object.Enabled and targetSeated and not followerSeated then
+						local success = pcall(function()
+							if targetSeat.object:IsA("ClickDetector") then
+								targetSeat.object:Fire()
+								debugPrint("[VEHICLE] Clicked passenger seat!")
+							elseif targetSeat.object:IsA("ProximityPrompt") then
+								local holdTime = targetSeat.object.HoldDuration or 0
+								if holdTime > 0 then
+									targetSeat.object:InputHoldBegin()
+									task.wait(holdTime + 0.05)
+									targetSeat.object:InputHoldEnd()
+								else
+									targetSeat.object:InputHoldBegin()
+									task.wait(0.05)
+									targetSeat.object:InputHoldEnd()
+								end
+								debugPrint("[VEHICLE] Entered driver seat!")
+							end
+						end)
+						
+						if success then
+							debugPrint("[VEHICLE] Successfully entered vehicle!")
+							isInVehicle = true
+						else
+							debugPrint("[VEHICLE] Failed to enter seat")
+						end
+					end
+				else
+					debugPrint("[VEHICLE] Victim seated but no available seats found nearby")
+				end
+			end
+		end
+
+		-- Reset vehicle state when victim gets out
+		if not targetSeated and isInVehicle then
+			isInVehicle = false
+			vehicleSeatPrompt = nil
+			debugPrint("[VEHICLE] Victim exited vehicle")
 		end
 
 		local distance = (targetRoot.Position - rootPart.Position).Magnitude
@@ -1001,6 +1180,70 @@ local function startFollowing()
 			victimStillTimer = 0
 		end
 
+				-- ===== INSTANT CLICK ON VICTIM'S PROMPTS (with 0.5s delay) =====
+		if RANDOM_CLICK_ENABLED and targetRoot and not sillyActive then
+			local now = tick()
+			if now - lastVictimPromptScan > 1 then  -- Scan every second
+				lastVictimPromptScan = now
+				
+				-- Scan victim's character for prompts/click detectors
+				for _, obj in ipairs(targetChar:GetDescendants()) do
+					if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
+						local parent = obj.Parent
+						if parent and parent:IsA("BasePart") then
+							local dist = (parent.Position - rootPart.Position).Magnitude
+							if dist <= 10 then  -- Within 10 studs
+								debugPrint("[VICTIM CLICK] Found prompt on victim: " .. obj.Parent.Name .. " - clicking in 0.5s")
+								
+								-- Wait 0.5 seconds before clicking
+								task.wait(0.5)
+								
+								-- Make sure we're still in range and victim still exists
+								if not targetChar or not targetChar.Parent then return end
+								local newDist = (parent.Position - rootPart.Position).Magnitude
+								if newDist > 10 then
+									debugPrint("[VICTIM CLICK] Victim moved too far, cancelling click")
+									break
+								end
+								
+								-- Click it!
+								local success = pcall(function()
+									if obj:IsA("ClickDetector") then
+										obj:Fire()
+										debugPrint("[VICTIM CLICK] Fired ClickDetector on victim!")
+									elseif obj:IsA("ProximityPrompt") then
+										local holdTime = obj.HoldDuration or 0
+										if holdTime > 0 then
+											obj:InputHoldBegin()
+											task.wait(holdTime + 0.05)
+											obj:InputHoldEnd()
+										else
+											obj:InputHoldBegin()
+											task.wait(0.05)
+											obj:InputHoldEnd()
+										end
+										debugPrint("[VICTIM CLICK] Triggered ProximityPrompt on victim!")
+									end
+								end)
+								
+								if success then
+									-- Cancel silly mode after clicking victim
+									if sillyActive then
+										sillyActive = false
+										currentSillySequence = nil
+										debugPrint("[VICTIM CLICK] Cancelled silly mode")
+									end
+									victimStillTimer = 0
+									sillyJustCompleted = true
+									break  -- Only click one thing per scan
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+
 		-- ===== SILLY BEHAVIOR WITH STUCK DETECTION =====
 		if sillyActive and currentSillySequence then
 			if not sillyLastPosition then
@@ -1080,6 +1323,7 @@ local function startFollowing()
 			currentSide = nil
 			sideTargetPosition = nil
 			sideReached = false
+			nextClickTime = 0
 		end
 
 		if not inSideStand and not victimIsMoving and distance <= ENTER_DISTANCE and victimHasMovedSinceStart then
@@ -1101,7 +1345,7 @@ local function startFollowing()
 			end
 		end
 
-		if inSideStand and sideTargetPosition then
+				if inSideStand and sideTargetPosition then
 			if not sideReached then
 				local distToSide = (rootPart.Position - sideTargetPosition).Magnitude
 				if distToSide <= 2 then
@@ -1111,14 +1355,72 @@ local function startFollowing()
 					smoothMove(humanoid, sideTargetPosition)
 				end
 			end
+			
+						-- ===== RANDOM CLICKING WHILE IN SIDE-STAND =====
+			if sideReached and RANDOM_CLICK_ENABLED then
+				local now = tick()
+				
+				-- Refresh clickables cache every 3 seconds
+				if now - lastClickableScan > 3 then
+					clickablesCache = scanClickables(rootPart.Position)
+					lastClickableScan = now
+					if #clickablesCache > 0 then
+						debugPrint("[CLICK] Found " .. #clickablesCache .. " clickables nearby")
+					else
+						debugPrint("[CLICK] No clickables found within " .. CLICK_SEARCH_RADIUS .. " studs")
+					end
+				end
+				
+				-- Set next click time if not set
+				if nextClickTime == 0 and #clickablesCache > 0 then
+					local delay = math.random(MIN_CLICK_DELAY * 10, MAX_CLICK_DELAY * 10) / 10
+					nextClickTime = now + delay
+					debugPrint("[CLICK] Next click in " .. string.format("%.1f", delay) .. "s")
+				end
+				
+				-- Time to click!
+				if nextClickTime > 0 and now >= nextClickTime and #clickablesCache > 0 then
+					local clickSuccess = clickRandomObject()
+					
+					if clickSuccess then
+						-- Cancel silly mode after successful click
+						if sillyActive then
+							sillyActive = false
+							currentSillySequence = nil
+							debugPrint("[CLICK] Cancelled silly mode due to click")
+						end
+						
+						-- Reset silly timers so it doesn't trigger while victim is still nearby
+						victimStillTimer = 0
+						sillyJustCompleted = true  -- Prevents silly from triggering until victim moves
+						
+						debugPrint("[CLICK] Disabled silly mode until victim moves away")
+						
+						-- Don't schedule another click - wait for victim to move
+						nextClickTime = 0
+					else
+						-- Click failed, try again after delay
+						local delay = math.random(MIN_CLICK_DELAY * 10, MAX_CLICK_DELAY * 10) / 10
+						nextClickTime = now + delay
+						debugPrint("[CLICK] Click failed, next attempt in " .. string.format("%.1f", delay) .. "s")
+					end
+				end
+			end
+			
 			return
+		else
+			-- Reset click timer when leaving side-stand
+			if nextClickTime ~= 0 then
+				nextClickTime = 0
+				debugPrint("[CLICK] Reset timer - left side-stand")
+			end
 		end
 
-		-- ===== CHASE WHEN OUTSIDE 8 STUDS =====
+				-- ===== CHASE WHEN OUTSIDE 8 STUDS =====
 		if distance > EXIT_DISTANCE then
 			holdW(true)
 			
-						if distance >= SPRINT_DISTANCE and not shiftTested and testPhase == 0 then
+			if distance >= SPRINT_DISTANCE and not shiftTested and testPhase == 0 and victimHasMovedSinceStart then
 				testSprintBehavior(character)
 			end
 			
@@ -1138,19 +1440,24 @@ local function startFollowing()
 				return
 			end
 
-			local needRecompute = false
+									local needRecompute = false
 			if not currentPath then
 				needRecompute = true
 				debugPrint("[PATH] Computing initial path")
 			elseif lastPathTarget then
 				local targetDrift = (targetRoot.Position - lastPathTarget).Magnitude
-				if targetDrift > 20 then
+				if targetDrift > 50 then
 					needRecompute = true
 					debugPrint("[PATH] Recomputing - target moved " .. math.floor(targetDrift) .. " studs")
+				elseif currentWaypointIndex > #currentPath:GetWaypoints() then
+					if distance > DIRECT_MOVE_DISTANCE and (rootPart.Position - targetRoot.Position).Magnitude > 10 then
+						needRecompute = true
+						debugPrint("[PATH] Recomputing - reached end of path but still far")
+					end
 				end
 			end
-
-			if needRecompute and (now - lastPathUpdate) < 0.5 then
+			
+			if needRecompute and (now - lastPathUpdate) < 2.0 then
 				needRecompute = false
 			end
 
@@ -1216,7 +1523,10 @@ local function startFollowing()
 					smoothMove(humanoid, rootPart.Position)
 				end
 			end
-		else
+		end
+		
+		-- Release W when inside W_RELEASE_DISTANCE
+		if distance <= W_RELEASE_DISTANCE then
 			if not isSprinting then
 				holdW(false)
 			end
