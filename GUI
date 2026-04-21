@@ -1295,7 +1295,7 @@ end
 			end
 		end
 
-				-- ===== SOCIAL AWARENESS: Move if someone blocks the view =====
+						-- ===== SOCIAL AWARENESS: Move if someone blocks the view =====
 		if SOCIAL_AWARENESS_ENABLED and staringActive and not isAdjustingPosition and not sillyActive then
 			local now = tick()
 			if now - lastBlockedCheck > 2 then  -- Check every 2 seconds
@@ -1309,11 +1309,26 @@ end
 					if newSpot then
 						isAdjustingPosition = true
 						
-						-- Move to the new spot
+						-- Save original stare state
+						local wasStaring = staringActive
+						
+						-- Move to the new spot while maintaining stare
 						local moveTime = 0
 						while moveTime < 1.5 do
 							if not targetRoot or not rootPart then break end
+							
+							-- Move toward new spot
 							smoothMove(humanoid, newSpot)
+							
+							-- FORCE maintain eye contact with victim while moving
+							if targetRoot and rootPart then
+								local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
+								if flatDir.Magnitude > 0.1 then
+									local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
+									rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.15)
+								end
+							end
+							
 							if (rootPart.Position - newSpot).Magnitude < 1 then break end
 							task.wait(0.1)
 							moveTime = moveTime + 0.1
