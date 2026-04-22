@@ -1,10 +1,3 @@
--- Advanced Follower GUI (Simple Pathfinding + Smooth Movement + Anti-Void + Silly Behavior + Camera Track + Debug + Sprint)
--- FIXED: W release when inside 8 studs
--- FIXED: Shift spam - only taps ONCE for crouch or shiftlock
--- FIXED: Pathfinding indentation
--- FIXED: Print override captures all logs
--- FIXED: Side-stand clicking only when Silly Mode ON
-
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
