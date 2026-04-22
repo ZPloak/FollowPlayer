@@ -2,6 +2,8 @@
 -- FIXED: W release when inside 8 studs
 -- FIXED: Shift spam - only taps ONCE for crouch or shiftlock
 -- FIXED: Pathfinding indentation
+-- FIXED: Print override captures all logs
+-- FIXED: Side-stand clicking only when Silly Mode ON
 
 local player = game.Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
@@ -442,9 +444,9 @@ DebugPanel.BorderSizePixel = 0
 DebugPanel.Visible = false
 DebugPanel.AnchorPoint = Vector2.new(0, 0.5)
 
-local DebugCorner = Instance.new("UICorner")
-DebugCorner.CornerRadius = UDim.new(0, 8)
-DebugCorner.Parent = DebugPanel
+local DebugCornerPanel = Instance.new("UICorner")
+DebugCornerPanel.CornerRadius = UDim.new(0, 8)
+DebugCornerPanel.Parent = DebugPanel
 
 local DebugHeader = Instance.new("Frame")
 DebugHeader.Name = "Header"
@@ -512,7 +514,12 @@ local function copyConsole()
 	CopyButton.Text = "Copy Console"
 end
 
-CopyButton.MouseButton1Click:Connect(copyConsole)
+CopyButton.MouseButton1Click:Connect(function()
+	pcall(function()
+		buttonPress(CopyButton)
+	end)
+	copyConsole()
+end)
 
 local ClearButton = Instance.new("TextButton")
 ClearButton.Parent = DebugPanel
@@ -531,6 +538,9 @@ ClearCorner.CornerRadius = UDim.new(0, 6)
 ClearCorner.Parent = ClearButton
 
 ClearButton.MouseButton1Click:Connect(function()
+	pcall(function()
+		buttonPress(ClearButton)
+	end)
 	consoleLogs = {}
 	ClearButton.Text = "Cleared!"
 	task.wait(1)
@@ -539,6 +549,9 @@ end)
 
 local minimized = false
 MinimizeButton.MouseButton1Click:Connect(function()
+	pcall(function()
+		buttonPress(MinimizeButton)
+	end)
 	minimized = not minimized
 	Content.Visible = not minimized
 	MainFrame.Size = minimized and UDim2.new(0, 340, 0, 44) or UDim2.new(0, 340, 0, 340)
@@ -607,6 +620,30 @@ local blockCount = 0
 local isMovingAside = false
 local lastSocialCheck = 0
 local stareLingerUntil = 0
+local lastBlockerCheck = 0
+local lastVictimLookTime = 0
+local mimicActive = false
+local mimicScheduledTime = 0
+
+local lastPathUpdate = 0
+local currentPath = nil
+local currentWaypointIndex = 0
+local lastPathTarget = nil
+
+-- Action System State
+local actionActive = false
+local currentAction = nil
+local lastActionIndex = 0
+local actionCooldown = false
+local actionStep = 0
+local actionCountdown = 0
+local sillyTimerPaused = false
+local cameraOffline = false
+local stareTimer = 0
+local actionData = {}
+
+-- Actions list
+local ACTIONS = {"Kiss", "Friendly Jump", "Headpat"}
 
 -- Timestamp function (HH:MM:SS.mmm)
 local function getTimestamp()
@@ -618,20 +655,56 @@ local function getTimestamp()
 	return string.format("%02d:%02d:%02d.%03d", hour, minute, second, ms)
 end
 
+-- Override print to capture EVERYTHING
+local originalPrint = print
+print = function(...)
+	local args = {...}
+	local msg = table.concat(args, " ")
+	local timestamped = string.format("[%s] %s", getTimestamp(), msg)
+	
+	-- Still output to real console
+	originalPrint(timestamped)
+	
+	-- Store in consoleLogs
+	if consoleLogs then
+		pcall(function()
+			table.insert(consoleLogs, timestamped)
+		end)
+	end
+end
+
 local function debugPrint(...)
 	if DEBUG_ENABLED then
 		local args = {...}
 		local msg = table.concat(args, " ")
 		local timestamped = string.format("[%s] [DEBUG] %s", getTimestamp(), msg)
-		print(timestamped)
 		
-		-- SAFE CHECK: Only insert if consoleLogs exists
+		-- Output to real console
+		originalPrint(timestamped)
+		
+		-- ALSO store in consoleLogs for Copy button
 		if consoleLogs then
 			pcall(function()
 				table.insert(consoleLogs, timestamped)
 			end)
 		end
 	end
+end
+
+-- Button press animation
+local function buttonPress(button)
+    local originalColor = button.BackgroundColor3
+    local darkerColor = Color3.new(
+        originalColor.R * 0.7,
+        originalColor.G * 0.7,
+        originalColor.B * 0.7
+    )
+    
+    button.BackgroundColor3 = darkerColor
+    
+    task.wait(0.1)
+    
+    button.BackgroundColor3 = originalColor
 end
 
 -- ══════════════════════════════════════════════
@@ -971,14 +1044,15 @@ end
 -- Function: Find all clickable objects nearby
 local function scanClickables(centerPos)
 	local found = {}
-	for _, obj in ipairs(Workspace:GetDescendants()) do
-		if obj:IsA("ClickDetector") or obj:IsA("ProximityPrompt") then
-			local parent = obj.Parent
-			if parent and parent:IsA("BasePart") then
-				if (parent.Position - centerPos).Magnitude <= CLICK_SEARCH_RADIUS then
-					table.insert(found, obj)
-				end
-			end
+	local overlapParams = OverlapParams.new()
+	overlapParams.MaxParts = 100
+	
+	local partsInRadius = Workspace:GetPartBoundsInRadius(centerPos, CLICK_SEARCH_RADIUS, overlapParams)
+	
+	for _, part in ipairs(partsInRadius) do
+		local obj = part:FindFirstChildWhichIsA("ProximityPrompt") or part:FindFirstChildWhichIsA("ClickDetector")
+		if obj then
+			table.insert(found, obj)
 		end
 	end
 	return found
@@ -987,7 +1061,9 @@ end
 -- Function: Click a random object from the cache
 local function clickRandomObject()
 	if #clickablesCache == 0 then 
-		debugPrint("[CLICK] No clickables in cache")
+		if SILLY_ENABLED then
+			debugPrint("[CLICK] No clickables in cache")
+		end
 		return false 
 	end
 	
@@ -998,7 +1074,9 @@ local function clickRandomObject()
 	local targetName = target.Parent and target.Parent.Name or "Unknown"
 	clickablesCache = {}
 	
-	debugPrint("[CLICK] Attempting to click: " .. targetName)
+	if SILLY_ENABLED then
+		debugPrint("[CLICK] Attempting to click: " .. targetName)
+	end
 	
 	local success = pcall(function()
 		if target:IsA("ClickDetector") then
@@ -1017,10 +1095,12 @@ local function clickRandomObject()
 		end
 	end)
 	
-	if success then
-		debugPrint("[CLICK] Successfully clicked: " .. targetName)
-	else
-		debugPrint("[CLICK] Failed to click: " .. targetName)
+	if SILLY_ENABLED then
+		if success then
+			debugPrint("[CLICK] Successfully clicked: " .. targetName)
+		else
+			debugPrint("[CLICK] Failed to click: " .. targetName)
+		end
 	end
 	
 	return success
@@ -1053,6 +1133,169 @@ local function isSomeoneBlocking(rootPart, targetRoot)
 	return false, nil
 end
 
+-- ══════════════════════════════════════════════
+--  Action Functions
+-- ══════════════════════════════════════════════
+local function pickRandomAction()
+    local index
+    repeat
+        index = math.random(1, #ACTIONS)
+    until index ~= lastActionIndex
+    
+    lastActionIndex = index
+    return ACTIONS[index]
+end
+
+-- ACTION: Kiss
+local function doKiss(humanoid, rootPart, targetRoot)
+    debugPrint("[ACTION] Performing Kiss")
+    
+    local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
+    if flatDir.Magnitude < 0.1 then return end
+    
+    -- Face victim
+    rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
+    
+    -- Walk forward
+    local forwardPos = rootPart.Position + flatDir.Unit * 2
+    local moveTime = 0
+    while moveTime < 1.0 and actionActive do
+        smoothMove(humanoid, forwardPos)
+        task.wait(0.1)
+        moveTime = moveTime + 0.1
+    end
+    
+    if not actionActive then return end
+    task.wait(0.3)
+    
+    -- Walk backward
+    local backwardPos = rootPart.Position - flatDir.Unit * 2
+    moveTime = 0
+    while moveTime < 1.0 and actionActive do
+        smoothMove(humanoid, backwardPos)
+        task.wait(0.1)
+        moveTime = moveTime + 0.1
+    end
+    
+    debugPrint("[ACTION] Kiss completed!")
+end
+
+-- ACTION: Friendly Jump
+local function doFriendlyJump(humanoid, rootPart, targetRoot)
+    debugPrint("[ACTION] Performing Friendly Jump")
+    
+    local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
+    if flatDir.Magnitude < 0.1 then return end
+    
+    -- Move in front of victim
+    local targetPos = targetRoot.Position - flatDir.Unit * 2
+    local moveTime = 0
+    while moveTime < 1.0 and actionActive do
+        smoothMove(humanoid, targetPos)
+        task.wait(0.1)
+        moveTime = moveTime + 0.1
+    end
+    
+    if not actionActive then return end
+    
+    -- Jump 1-3 times
+    local jumps = math.random(1, 3)
+    debugPrint("[ACTION] Friendly Jump - " .. jumps .. " jumps")
+    
+    for i = 1, jumps do
+        if not actionActive then break end
+        humanoid.Jump = true
+        task.wait(0.4)
+    end
+    
+    debugPrint("[ACTION] Friendly Jump completed!")
+end
+
+-- ACTION: Headpat
+local function doHeadpat(humanoid, rootPart, targetRoot, camera)
+    debugPrint("[ACTION] Performing Headpat")
+    
+    local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
+    if flatDir.Magnitude < 0.1 then return end
+    
+    -- Move in front of victim
+    local targetPos = targetRoot.Position - flatDir.Unit * 2
+    local moveTime = 0
+    while moveTime < 1.0 and actionActive do
+        smoothMove(humanoid, targetPos)
+        task.wait(0.1)
+        moveTime = moveTime + 0.1
+    end
+    
+    if not actionActive then return end
+    
+    -- Look left and right 4 times
+    cameraOffline = true
+    debugPrint("[ACTION] Headpat - camera offline, looking left/right")
+    
+    for i = 1, 4 do
+        if not actionActive then break end
+        
+        -- Look left
+        local leftDir = (rootPart.CFrame * CFrame.Angles(0, 1.5, 0)).LookVector
+        local lookTime = 0
+        while lookTime < 0.3 and actionActive do
+            rootPart.CFrame = rootPart.CFrame:Lerp(CFrame.lookAt(rootPart.Position, rootPart.Position + leftDir), 0.2)
+            if camera then
+                camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + leftDir), 0.2)
+            end
+            task.wait(0.05)
+            lookTime = lookTime + 0.05
+        end
+        
+        task.wait(0.1)
+        if not actionActive then break end
+        
+        -- Look right
+        local rightDir = (rootPart.CFrame * CFrame.Angles(0, -1.5, 0)).LookVector
+        lookTime = 0
+        while lookTime < 0.3 and actionActive do
+            rootPart.CFrame = rootPart.CFrame:Lerp(CFrame.lookAt(rootPart.Position, rootPart.Position + rightDir), 0.2)
+            if camera then
+                camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + rightDir), 0.2)
+            end
+            task.wait(0.05)
+            lookTime = lookTime + 0.05
+        end
+        
+        task.wait(0.1)
+    end
+    
+    if not actionActive then 
+        cameraOffline = false
+        return 
+    end
+    
+    -- Face forward
+    local lookTime = 0
+    while lookTime < 0.3 and actionActive do
+        rootPart.CFrame = rootPart.CFrame:Lerp(CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit), 0.2)
+        if camera then
+            camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + flatDir.Unit), 0.2)
+        end
+        task.wait(0.05)
+        lookTime = lookTime + 0.05
+    end
+    
+    cameraOffline = false
+    debugPrint("[ACTION] Camera back online, walking backward")
+    
+    -- Walk backward
+    local backwardPos = rootPart.Position - flatDir.Unit * 3
+    moveTime = 0
+    while moveTime < 1.0 and actionActive do
+        smoothMove(humanoid, backwardPos)
+        task.wait(0.1)
+        moveTime = moveTime + 0.1
+    end
+    
+    debugPrint("[ACTION] Headpat completed!")
+end
 
 -- ══════════════════════════════════════════════
 --  Main follow loop
@@ -1060,10 +1303,11 @@ end
 local function startFollowing()
 	if followConnection then followConnection:Disconnect() end
 
-	local lastPathUpdate = 0
-	local currentPath = nil
-	local currentWaypointIndex = 0
-	local lastPathTarget = nil
+	-- Reset path variables
+	lastPathUpdate = 0
+	currentPath = nil
+	currentWaypointIndex = 0
+	lastPathTarget = nil
 
 	victimIsMoving = false
 	victimStillTimer = 0
@@ -1123,63 +1367,63 @@ local function startFollowing()
 		end
 
 		-- ===== VEHICLE FOLLOW: Enter seat when victim is seated =====
-if VEHICLE_FOLLOW_ENABLED and targetSeated and not followerSeated and not sillyActive then
-	local now = tick()
-	
-	-- Only check every 2 seconds to avoid spam
-	if now - lastVehicleScan > 2 then
-		lastVehicleScan = now
-		
-		-- Find nearby ProximityPrompts (vehicle seats)
-		local nearbyPrompts = {}
-		for _, obj in ipairs(Workspace:GetDescendants()) do
-			if obj:IsA("ProximityPrompt") then
-				local parent = obj.Parent
-				if parent and parent:IsA("BasePart") then
-					local dist = (parent.Position - rootPart.Position).Magnitude
-					if dist <= VEHICLE_SEARCH_RADIUS then
-						-- Check if it's a vehicle seat (usually named "Seat" or "VehicleSeat")
-						local isSeat = parent:IsA("Seat") or parent:IsA("VehicleSeat") or parent.Name:lower():find("seat")
-						if isSeat and obj.Enabled then
-							table.insert(nearbyPrompts, obj)
+		if VEHICLE_FOLLOW_ENABLED and targetSeated and not followerSeated and not sillyActive then
+			local now = tick()
+			
+			-- Only check every 2 seconds to avoid spam
+			if now - lastVehicleScan > 2 then
+				lastVehicleScan = now
+				
+				-- Find nearby ProximityPrompts (vehicle seats)
+				local nearbyPrompts = {}
+				for _, obj in ipairs(Workspace:GetDescendants()) do
+					if obj:IsA("ProximityPrompt") then
+						local parent = obj.Parent
+						if parent and parent:IsA("BasePart") then
+							local dist = (parent.Position - rootPart.Position).Magnitude
+							if dist <= VEHICLE_SEARCH_RADIUS then
+								-- Check if it's a vehicle seat (usually named "Seat" or "VehicleSeat")
+								local isSeat = parent:IsA("Seat") or parent:IsA("VehicleSeat") or parent.Name:lower():find("seat")
+								if isSeat and obj.Enabled then
+									table.insert(nearbyPrompts, obj)
+								end
+							end
 						end
 					end
 				end
+				
+				if #nearbyPrompts > 0 then
+					-- Pick the closest one
+					table.sort(nearbyPrompts, function(a, b)
+						return (a.Parent.Position - rootPart.Position).Magnitude < (b.Parent.Position - rootPart.Position).Magnitude
+					end)
+					vehicleSeatPrompt = nearbyPrompts[1]
+					
+					local delay = math.random(VEHICLE_SEAT_DELAY_MIN * 10, VEHICLE_SEAT_DELAY_MAX * 10) / 10
+					debugPrint("[VEHICLE] Found seat! Entering in " .. string.format("%.1f", delay) .. "s")
+					task.wait(delay)
+					
+					if vehicleSeatPrompt and vehicleSeatPrompt.Enabled and targetSeated and not followerSeated then
+						pcall(function()
+							vehicleSeatPrompt:InputHoldBegin()
+							task.wait(0.1)
+							vehicleSeatPrompt:InputHoldEnd()
+						end)
+						debugPrint("[VEHICLE] Entered vehicle!")
+						isInVehicle = true
+					end
+				else
+					debugPrint("[VEHICLE] Victim seated but no available seats found nearby")
+				end
 			end
 		end
-		
-		if #nearbyPrompts > 0 then
-			-- Pick the closest one
-			table.sort(nearbyPrompts, function(a, b)
-				return (a.Parent.Position - rootPart.Position).Magnitude < (b.Parent.Position - rootPart.Position).Magnitude
-			end)
-			vehicleSeatPrompt = nearbyPrompts[1]
-			
-			local delay = math.random(VEHICLE_SEAT_DELAY_MIN * 10, VEHICLE_SEAT_DELAY_MAX * 10) / 10
-			debugPrint("[VEHICLE] Found seat! Entering in " .. string.format("%.1f", delay) .. "s")
-			task.wait(delay)
-			
-			if vehicleSeatPrompt and vehicleSeatPrompt.Enabled and targetSeated and not followerSeated then
-				pcall(function()
-					vehicleSeatPrompt:InputHoldBegin()
-					task.wait(0.1)
-					vehicleSeatPrompt:InputHoldEnd()
-				end)
-				debugPrint("[VEHICLE] Entered vehicle!")
-				isInVehicle = true
-			end
-		else
-			debugPrint("[VEHICLE] Victim seated but no available seats found nearby")
-		end
-	end
-end
 
--- Reset vehicle state when victim gets out
-if not targetSeated and isInVehicle then
-	isInVehicle = false
-	vehicleSeatPrompt = nil
-	debugPrint("[VEHICLE] Victim exited vehicle")
-end
+		-- Reset vehicle state when victim gets out
+		if not targetSeated and isInVehicle then
+			isInVehicle = false
+			vehicleSeatPrompt = nil
+			debugPrint("[VEHICLE] Victim exited vehicle")
+		end
 
 		local distance = (targetRoot.Position - rootPart.Position).Magnitude
 		local now = tick()
@@ -1214,175 +1458,460 @@ end
 			end
 		end
 
-		-- ===== STARING CONTEST =====
-		if targetRoot and rootPart then
-			local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
-			local now = tick()
-			
-			if victimLooking then
-				if not staringActive and not stareDelayStart then
-					stareDelayStart = now
-					debugPrint("[STARE] Victim looking! Waiting 0.8s...")
-				elseif staringActive then
-					stareEndTime = now + 0.5
-				end
-			else
-				if staringActive then
-					if now >= stareEndTime then
-						staringActive = false
-						stareDelayStart = nil
-						debugPrint("[STARE] Victim looked away")
-					end
-				elseif stareDelayStart then
-					stareDelayStart = nil
-					debugPrint("[STARE] Victim looked away during delay")
-				end
-			end
-			
-			if stareDelayStart and not staringActive then
-				if now - stareDelayStart >= 0.8 then
-					staringActive = true
-					stareEndTime = now + 0.5
-					stareDelayStart = nil
-					debugPrint("[STARE] Now staring at victim!")
-				end
-			end
-			
-			if staringActive then
-				local camera = workspace.CurrentCamera
-				if camera then
-					local lookAtPos = targetRoot.Position + Vector3.new(0, 2, 0)
-					local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
-					camera.CFrame = camera.CFrame:Lerp(newCFrame, 0.08)
-				end
-				
-				local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
-				if flatDir.Magnitude > 0.1 then
-					local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
-					rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.15)
-				end
-			end
-		end
+		-- ===== STARING CONTEST + MIMIC + ACTIONS =====
+if targetRoot and rootPart then
+    local distanceToVictim = (targetRoot.Position - rootPart.Position).Magnitude
+    
+    -- ONLY run if inside 8 studs AND Silly Mode is ON
+    if distanceToVictim > 8 or not SILLY_ENABLED then
+        staringActive = false
+        mimicActive = false
+        actionActive = false
+        currentAction = nil
+        sillyTimerPaused = false
+        cameraOffline = false
+    else
+        local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
+        local now = tick()
+        local camera = workspace.CurrentCamera
+        
+        -- ===== VICTIM LOOKING AT FOLLOWER =====
+        if victimLooking then
+            lastVictimLookTime = now
+            mimicActive = false
+            mimicScheduledTime = 0
+            
+            if not staringActive then
+                actionCooldown = false
+            end
+            
+            if not staringActive and not stareDelayStart then
+                stareDelayStart = now
+                stareTimer = 0
+                actionCountdown = 0
+                debugPrint("[STARE] Victim looking! Waiting 0.8s...")
+            elseif staringActive and not actionActive then
+                stareEndTime = now + 0.5
+            end
+        else
+            -- Victim looked away
+            if staringActive then
+                if now >= stareEndTime then
+                    staringActive = false
+                    stareDelayStart = nil
+                    stareTimer = 0
+                    actionCountdown = 0
+                    sillyTimerPaused = false
+                    debugPrint("[STARE] Victim looked away - scheduling mimic in 1s")
+                    mimicScheduledTime = now + 1.0
+                end
+            elseif stareDelayStart then
+                stareDelayStart = nil
+                debugPrint("[STARE] Victim looked away during delay")
+            end
+        end
+        
+        -- ===== ACTIVATE STARING =====
+        if stareDelayStart and not staringActive then
+            if now - stareDelayStart >= 0.8 then
+                staringActive = true
+                stareEndTime = now + 0.5
+                stareDelayStart = nil
+                stareTimer = 0
+                sillyTimerPaused = true
+                debugPrint("[STARE] Now staring at victim!")
+            end
+        end
+        
+        -- ===== ACTIVATE MIMIC =====
+        if mimicScheduledTime > 0 and now >= mimicScheduledTime and now < mimicScheduledTime + 1.0 then
+            if not mimicActive then
+                mimicActive = true
+                mimicScheduledTime = 0
+                debugPrint("[MIMIC] Activated - facing victim's direction!")
+            end
+        end
+        
+        -- ===== ACTION COUNTDOWN (only during stare) =====
+        if staringActive and not actionActive and not actionCooldown then
+            stareTimer = stareTimer + deltaTime
+            
+            if math.floor(stareTimer) > math.floor(stareTimer - deltaTime) then
+                debugPrint("[STARE TIMER] " .. math.floor(stareTimer) .. " / 10 seconds")
+            end
+            
+                       if stareTimer >= 10 and actionCountdown == 0 then
+                actionCountdown = 1
+                sillyTimerPaused = true
+                inSideStand = false  -- ⭐ Disable side-stand for ALL actions
+                debugPrint("[ACTION] 10s reached! Starting 5s countdown...")
+            end  -- ⭐ MISSING END WAS HERE
+            
+            if actionCountdown > 0 then
+                actionCountdown = actionCountdown + deltaTime
+                
+                if math.floor(actionCountdown) > math.floor(actionCountdown - deltaTime) and actionCountdown <= 5 then
+                    debugPrint("[ACTION COUNTDOWN] " .. math.floor(6 - actionCountdown) .. "s remaining")
+                end
+                
+                if actionCountdown >= 1 and actionCountdown <= 5 then
+                    if math.random(1, 100) <= 2 then
+                        currentAction = pickRandomAction()
+                        actionActive = true
+                        actionStep = 0
+                        actionCountdown = 0
+                        sillyTimerPaused = true
+                        mimicActive = false
+                        staringActive = false
+                        debugPrint("[ACTION] Triggered: " .. currentAction)
+                        
+                        if currentAction == "Friendly Jump" then
+                            inSideStand = false
+                        end
+                    end
+                end
+                
+                if actionCountdown > 5 then
+                    actionCountdown = 0
+                    actionCooldown = true
+                    sillyTimerPaused = false
+                    inSideStand = true  -- ⭐ Re-enable side-stand
+                    debugPrint("[ACTION] Countdown ended - no action triggered")
+                end
+            end
+        end
+        
+                        -- ===== PAUSE SILLY TIMER =====
+        if sillyTimerPaused or actionCountdown > 0 or staringActive then
+            victimStillTimer = 0
+        end
+        
+        -- ===== PRIORITY 1: PERFORM ACTIONS =====
+        if actionActive and currentAction then
+            
+            -- Initialize action playback
+            if actionStep == 0 then
+                -- Disable camera tracking during action
+                CAMERA_ENABLED = false
+                
+                actionData = {
+                    index = 1,
+                    lastPos = rootPart.Position,
+                    stuckTimer = 0,
+                    jumpTriggered = false
+                }
+                
+                -- Load the recorded sequence based on action type
+                if currentAction == "Kiss" then
+                    actionData.sequence = {
+                        {V3(-0.08,-0.34,-4.84), false}, {V3(-0.08,-0.34,-4.84), false}, {V3(-0.08,-0.34,-4.84), false},
+                        {V3(-0.08,-0.34,-4.84), false}, {V3(-0.08,-0.34,-4.84), false}, {V3(-0.08,-0.34,-4.84), false},
+                        {V3(-0.08,-0.34,-4.84), false}, {V3(-0.08,-0.34,-4.84), false}, {V3(-0.09,-0.34,-4.34), false},
+                        {V3(-0.11,-0.34,-3.41), false}, {V3(-0.14,-0.34,-2.48), false}, {V3(-0.16,-0.34,-1.68), false},
+                        {V3(-0.18,-0.34,-0.88), false}, {V3(-0.22,-0.37,-0.85), false}, {V3(-0.26,-0.40,-0.87), false},
+                        {V3(-0.28,-0.40,-0.90), false}, {V3(-0.28,-0.39,-0.90), false}, {V3(-0.29,-0.39,-0.95), false},
+                        {V3(-0.31,-0.38,-1.00), false}, {V3(-0.35,-0.37,-1.04), false}, {V3(-0.39,-0.36,-1.04), false},
+                        {V3(-0.44,-0.36,-1.06), false}, {V3(-0.45,-0.35,-1.21), false}, {V3(-0.44,-0.35,-1.27), false},
+                        {V3(-0.44,-0.34,-1.34), false}, {V3(-0.45,-0.32,-1.31), false}, {V3(-0.46,-0.32,-1.32), false},
+                        {V3(-0.45,-0.33,-1.37), false}, {V3(-0.45,-0.33,-1.43), false}, {V3(-0.45,-0.33,-1.43), false},
+                        {V3(-0.45,-0.33,-1.43), false}, {V3(-0.45,-0.33,-1.43), false}, {V3(-0.45,-0.33,-1.43), false},
+                        {V3(-0.45,-0.33,-1.43), false}, {V3(-0.45,-0.33,-1.43), false}, {V3(-0.45,-0.33,-1.43), false},
+                        {V3(-0.45,-0.33,-1.43), false}, {V3(-0.45,-0.33,-1.43), false}, {V3(-0.42,-0.33,-2.15), false},
+                        {V3(-0.39,-0.33,-3.09), false}, {V3(-0.36,-0.33,-3.82), false}, {V3(-0.33,-0.33,-4.68), false},
+                        {V3(-0.31,-0.33,-5.39), false}, {V3(-0.31,-0.33,-5.42), false}, {V3(-0.31,-0.33,-5.42), false},
+                        {V3(-0.31,-0.33,-5.42), false}, {V3(-0.31,-0.33,-5.42), false}, {V3(-0.31,-0.33,-5.42), false},
+                        {V3(-0.31,-0.33,-5.42), false}, {V3(-0.31,-0.33,-5.42), false}, {V3(-0.31,-0.34,-5.42), false},
+                        {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false},
+                        {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false},
+                        {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false},
+                        {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false},
+                        {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false},
+                        {V3(-0.31,-0.34,-5.42), false}, {V3(-0.31,-0.34,-5.42), false}
+                    }
+                elseif currentAction == "Friendly Jump" then
+                    actionData.sequence = {
+                        {V3(0.18,-0.34,-4.16), false}, {V3(0.18,1.72,-4.16), false}, {V3(0.18,3.59,-4.16), true},
+                        {V3(0.18,5.38,-4.16), true}, {V3(0.18,6.56,-4.16), true}, {V3(0.18,6.96,-4.16), true},
+                        {V3(0.18,6.82,-4.16), false}, {V3(0.18,6.11,-4.16), false}, {V3(0.18,4.70,-4.16), false},
+                        {V3(0.18,3.13,-4.16), false}, {V3(0.18,0.53,-4.16), false}, {V3(0.18,-0.51,-4.16), false},
+                        {V3(0.18,-0.36,-4.16), false}, {V3(0.18,-0.34,-4.16), false}
+                    }
+                    actionData.repeatCount = math.random(1, 3)
+                    actionData.currentRepeat = 1
+                elseif currentAction == "Headpat" then
+                    actionData.sequence = {
+                        {V3(-0.38,-0.34,-5.80), false}, {V3(-0.38,-0.34,-5.80), false}, {V3(-0.38,-0.34,-5.80), false},
+                        {V3(-0.38,-0.34,-5.80), false}, {V3(-0.38,-0.34,-5.80), false}, {V3(-0.38,-0.34,-5.80), false},
+                        {V3(-0.39,-0.34,-5.44), false}, {V3(-0.38,-0.34,-4.64), false}, {V3(-0.34,-0.34,-3.71), false},
+                        {V3(-0.30,-0.34,-2.78), false}, {V3(-0.27,-0.34,-1.98), false}, {V3(-0.25,-0.34,-1.42), false},
+                        {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false},
+                        {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false},
+                        {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false},
+                        {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false},
+                        {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false},
+                        {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false}, {V3(-0.25,-0.34,-1.38), false},
+                        {V3(-0.25,-0.34,-1.38), false}, {V3(-0.01,-0.35,-1.45), false}, {V3(0.01,-0.34,-1.48), false},
+                        {V3(0.01,-0.34,-1.48), false}, {V3(0.01,-0.34,-1.48), false}, {V3(0.01,-0.34,-1.48), false},
+                        {V3(0.01,-0.34,-1.48), false}, {V3(0.01,-0.34,-1.48), false}, {V3(0.01,-0.34,-1.48), false},
+                        {V3(0.01,-0.34,-1.48), false}, {V3(0.01,-0.34,-1.49), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false}, {V3(0.01,-0.34,-1.50), false},
+                        {V3(0.02,-0.34,-1.53), false}, {V3(0.14,-0.34,-2.35), false}, {V3(0.26,-0.34,-3.14), false},
+                        {V3(0.40,-0.34,-4.06), false}, {V3(0.52,-0.34,-4.85), false}, {V3(0.59,-0.34,-5.32), false},
+                        {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false},
+                        {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.33,-5.32), false},
+                        {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false},
+                        {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false},
+                        {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false},
+                        {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false},
+                        {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false}, {V3(0.59,-0.34,-5.32), false}
+                    }
+                end
+                actionStep = 1
+            end
+            
+            -- Play the recorded sequence
+            if actionData and actionData.sequence then
+                local seq = actionData.sequence
+                local idx = actionData.index
+                
+                if idx <= #seq then
+                    local data = seq[idx]
+                    local movePos = targetRoot.Position + data[1]
+                    
+                    if isSafePosition(movePos) then
+                        smoothMove(humanoid, movePos)
+                    end
+                    
+                    -- Handle jump
+                    if data[2] and not actionData.jumpTriggered then
+                        humanoid.Jump = true
+                        actionData.jumpTriggered = true
+                    elseif actionData.jumpTriggered and humanoid.FloorMaterial ~= Enum.Material.Air then
+                        actionData.jumpTriggered = false
+                    end
+                    
+                    -- Check if reached waypoint
+                    local dist = (rootPart.Position - movePos).Magnitude
+                    if dist < (data[2] and 5 or 3) then
+                        actionData.index = idx + 1
+                    end
+                    
+                    -- Stuck detection
+                    local moved = (rootPart.Position - actionData.lastPos).Magnitude
+                    if moved < 0.5 then
+                        actionData.stuckTimer = actionData.stuckTimer + deltaTime
+                        if actionData.stuckTimer >= 3 then
+                            debugPrint("[ACTION] Stuck detected! Canceling and forcing side-stand")
+                            actionActive = false
+                            currentAction = nil
+                            sillyTimerPaused = false
+                            CAMERA_ENABLED = true
+                            inSideStand = true
+                            sideReached = false
+                            currentSide = (math.random(1, 2) == 1) and "left" or "right"
+                            local sidePos = getSidePosition(targetRoot, currentSide).Position
+                            sideTargetPosition = isSafePosition(sidePos) and sidePos or targetRoot.Position
+                            return
+                        end
+                    else
+                        actionData.stuckTimer = 0
+                        actionData.lastPos = rootPart.Position
+                    end
+                    
+                else
+                    -- Sequence complete
+                    if currentAction == "Friendly Jump" and actionData.currentRepeat < actionData.repeatCount then
+                        -- Repeat the jump
+                        actionData.currentRepeat = actionData.currentRepeat + 1
+                        actionData.index = 1
+                        actionData.jumpTriggered = false
+                        debugPrint("[ACTION] Friendly Jump - repeat " .. actionData.currentRepeat .. "/" .. actionData.repeatCount)
+                    else
+                        -- Action finished
+                        actionActive = false
+                        currentAction = nil
+                        actionCooldown = true
+                        sillyTimerPaused = false
+                        CAMERA_ENABLED = true
+                        inSideStand = true
+                        debugPrint("[ACTION] " .. (currentAction == "Kiss" and "Kiss" or currentAction == "Friendly Jump" and "Friendly Jump" or "Headpat") .. " completed!")
+                    end
+                end
+            end
+            
+            return
+        end
+        
+        -- ===== PRIORITY 2: MIMIC (look where victim is looking) =====
+        if mimicActive then
+            local victimLookDir = targetRoot.CFrame.LookVector
+            local flatDir = Vector3.new(victimLookDir.X, 0, victimLookDir.Z)
+            
+            if flatDir.Magnitude > 0.1 then
+                local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
+                rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.12)
+                
+                if camera then
+                    local lookAtPos = camera.CFrame.Position + flatDir.Unit * 10
+                    local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
+                    camera.CFrame = camera.CFrame:Lerp(newCFrame, 0.1)
+                end
+            end
+            
+            if now - lastVictimLookTime > 5.0 then
+                mimicActive = false
+                debugPrint("[MIMIC] Ended after 5 seconds")
+            end
+            
+            return
+        end
+        
+        -- ===== PRIORITY 3: STARING (look AT victim) =====
+        if staringActive and not actionActive then
+            if camera then
+                local lookAtPos = targetRoot.Position + Vector3.new(0, 2, 0)
+                local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
+                camera.CFrame = camera.CFrame:Lerp(newCFrame, 0.08)
+            end
+            
+            local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
+            if flatDir.Magnitude > 0.1 then
+                local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
+                rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.15)
+            end
+        end
+    end
+end
 
-						-- ===== NEW SIMPLE SOCIAL: Step aside when blocked =====
-		if NEW_SOCIAL_ENABLED and not isMovingAside and not sillyActive then
-			local now = tick()
-			local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
-			
-			-- Update linger timer when victim is looking
-			if victimLooking then
-				stareLingerUntil = now + 4.0
-			end
-			
-			-- Active if victim is looking OR within linger period
-			local isActive = victimLooking or (stareLingerUntil and now < stareLingerUntil)
-			
-			if isActive then
-				local isBlocked, blocker = isSomeoneBlocking(rootPart, targetRoot)
-				
-				if isBlocked and blocker then
-					local blockerName = blocker.DisplayName
-					
-					-- Reset linger timer when blocked
-					stareLingerUntil = now + 4.0
-					
-					-- Check if it's the same person as before
-					if blockerName == lastBlockerName then
-						blockCount = blockCount + 1
-					else
-						lastBlockerName = blockerName
-						blockCount = 1
-					end
-					
-					debugPrint("[SOCIAL] " .. blockerName .. " is blocking! Waiting 2s... (Count: " .. blockCount .. ")")
-					
-					isMovingAside = true
-					
-					-- Wait 2 seconds
-					task.wait(2.0)
-					
-					-- Check if still blocked after delay
-					if not targetRoot or not rootPart then
-						isMovingAside = false
-						return
-					end
-					
-					local stillBlocked, _ = isSomeoneBlocking(rootPart, targetRoot)
-					if not stillBlocked then
-						debugPrint("[SOCIAL] Blocker left during delay, cancelling")
-						isMovingAside = false
-						return
-					end
-					
-					-- Decide where to move
-					if blockCount >= PERSISTENT_BLOCK_THRESHOLD then
-						debugPrint("[SOCIAL] Persistent blocker! Moving to victim's side using side-stand")
-						
-						-- KILL LINGER AND STARING - stop looking completely
-						stareLingerUntil = 0
-						staringActive = false
-						
-						-- Use the existing side-stand feature
-						inSideStand = true
-						sideReached = false
-						currentSide = (blockCount % 2 == 1) and "left" or "right"
-						local sidePos = getSidePosition(targetRoot, currentSide).Position
-						if isSafePosition(sidePos) then
-							sideTargetPosition = sidePos
-						else
-							local otherSide = (currentSide == "left") and "right" or "left"
-							local altPos = getSidePosition(targetRoot, otherSide).Position
-							sideTargetPosition = isSafePosition(altPos) and altPos or targetRoot.Position
-						end
-						
-						-- Wait for side-stand to complete
-						local waitTime = 0
-						while waitTime < 2.0 do
-							if sideReached then break end
-							task.wait(0.1)
-							waitTime = waitTime + 0.1
-						end
-						
-						-- Reset count after moving to victim's side
-						blockCount = 0
-						lastBlockerName = nil
-						
-					else
-						-- Just step aside (count 1-2) - KEEP LOOKING
-						local direction = (targetRoot.Position - rootPart.Position).Unit
-						local perpendicular = Vector3.new(-direction.Z, 0, direction.X)
-						local moveDirection = (blockCount % 2 == 1) and perpendicular or -perpendicular
-						debugPrint("[SOCIAL] Stepping aside")
-						
-						local finalTarget = rootPart.Position + moveDirection * STEP_DISTANCE
-						local moveTime = 0
-						while moveTime < 1.5 do
-							if not targetRoot or not rootPart then break end
-							smoothMove(humanoid, finalTarget)
-							if (rootPart.Position - finalTarget).Magnitude < 1.5 then break end
-							task.wait(0.1)
-							moveTime = moveTime + 0.1
-						end
-					end
-					
-					debugPrint("[SOCIAL] Finished moving")
-					
-					-- Wait 1 second before allowing another trigger
-					task.wait(1.0)
-					
-					isMovingAside = false
-					
-				else
-					-- No blocker, reset count
-					lastBlockerName = nil
-					blockCount = 0
-				end
-			else
-				-- Not active, reset count
-				lastBlockerName = nil
-				blockCount = 0
-			end
-		end
+-- ===== NEW SIMPLE SOCIAL: Step aside when blocked =====
+if NEW_SOCIAL_ENABLED and not isMovingAside and not sillyActive then
+    local now = tick()
+    local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
+    
+    -- Update linger timer when victim is looking
+    if victimLooking then
+        stareLingerUntil = now + 4.0
+    end
+    
+    -- Active if victim is looking OR within linger period
+    local isActive = victimLooking or (stareLingerUntil and now < stareLingerUntil)
+    
+    if isActive and (now - lastBlockerCheck > 0.3) then
+        lastBlockerCheck = now
+        
+        local isBlocked, blocker = isSomeoneBlocking(rootPart, targetRoot)
+        
+        if isBlocked and blocker then
+            local blockerName = blocker.DisplayName
+            
+            -- Reset linger timer when blocked
+            stareLingerUntil = now + 4.0
+            
+            -- Check if it's the same person as before
+            if blockerName == lastBlockerName then
+                blockCount = blockCount + 1
+            else
+                lastBlockerName = blockerName
+                blockCount = 1
+            end
+            
+            debugPrint("[SOCIAL] " .. blockerName .. " is blocking! Waiting 2s... (Count: " .. blockCount .. ")")
+            
+            isMovingAside = true
+            
+            -- Wait 2 seconds
+            task.wait(2.0)
+            
+            -- Check if still blocked after delay
+            if not targetRoot or not rootPart then
+                isMovingAside = false
+                return
+            end
+            
+            local stillBlocked, _ = isSomeoneBlocking(rootPart, targetRoot)
+            if not stillBlocked then
+                debugPrint("[SOCIAL] Blocker left during delay, cancelling")
+                isMovingAside = false
+                return
+            end
+            
+            -- Decide where to move
+            if blockCount >= PERSISTENT_BLOCK_THRESHOLD then
+                debugPrint("[SOCIAL] Persistent blocker! Moving to victim's side using side-stand")
+                
+                -- KILL LINGER AND STARING - stop looking completely
+                stareLingerUntil = 0
+                staringActive = false
+                
+                -- Use the existing side-stand feature
+                inSideStand = true
+                sideReached = false
+                currentSide = (blockCount % 2 == 1) and "left" or "right"
+                local sidePos = getSidePosition(targetRoot, currentSide).Position
+                if isSafePosition(sidePos) then
+                    sideTargetPosition = sidePos
+                else
+                    local otherSide = (currentSide == "left") and "right" or "left"
+                    local altPos = getSidePosition(targetRoot, otherSide).Position
+                    sideTargetPosition = isSafePosition(altPos) and altPos or targetRoot.Position
+                end
+                
+                -- Wait for side-stand to complete
+                local waitTime = 0
+                while waitTime < 2.0 do
+                    if sideReached then break end
+                    task.wait(0.1)
+                    waitTime = waitTime + 0.1
+                end
+                
+                -- Reset count after moving to victim's side
+                blockCount = 0
+                lastBlockerName = nil
+                
+            else
+                -- Just step aside (count 1-2) - KEEP LOOKING
+                local direction = (targetRoot.Position - rootPart.Position).Unit
+                local perpendicular = Vector3.new(-direction.Z, 0, direction.X)
+                local moveDirection = (blockCount % 2 == 1) and perpendicular or -perpendicular
+                debugPrint("[SOCIAL] Stepping aside")
+                
+                local finalTarget = rootPart.Position + moveDirection * STEP_DISTANCE
+                local moveTime = 0
+                while moveTime < 1.5 do
+                    if not targetRoot or not rootPart then break end
+                    smoothMove(humanoid, finalTarget)
+                    if (rootPart.Position - finalTarget).Magnitude < 1.5 then break end
+                    task.wait(0.1)
+                    moveTime = moveTime + 0.1
+                end
+            end
+            
+            debugPrint("[SOCIAL] Finished moving")
+            
+            -- Wait 1 second before allowing another trigger
+            task.wait(1.0)
+            
+            isMovingAside = false
+            
+        else
+            -- No blocker, reset count
+            lastBlockerName = nil
+            blockCount = 0
+        end
+    end
+else
+    -- Not active, reset count
+    lastBlockerName = nil
+    blockCount = 0
+end
 
 		local wasMoving = victimIsMoving
 		if targetHumanoid then
@@ -1452,7 +1981,7 @@ end
 			victimStillTimer = 0
 		end
 
-										-- ===== VICTIM PROMPT CLICK (FOR DUET EMOTES - WITH COOLDOWN) =====
+		-- ===== VICTIM PROMPT CLICK (FOR DUET EMOTES - WITH COOLDOWN) =====
 		if RANDOM_CLICK_ENABLED and targetRoot and not sillyActive then
 			local now = tick()
 			if now - lastVictimPromptScan > 2 then  -- Only scan every 2 seconds
@@ -1627,7 +2156,7 @@ end
 			end
 		end
 
-				if inSideStand and sideTargetPosition then
+		if inSideStand and sideTargetPosition then
 			if not sideReached then
 				local distToSide = (rootPart.Position - sideTargetPosition).Magnitude
 				if distToSide <= 2 then
@@ -1638,8 +2167,8 @@ end
 				end
 			end
 			
-									-- ===== RANDOM CLICKING WHILE IN SIDE-STAND =====
-			if sideReached and RANDOM_CLICK_ENABLED then
+			-- ===== RANDOM CLICKING WHILE IN SIDE-STAND (ONLY WHEN SILLY IS ON) =====
+			if sideReached and RANDOM_CLICK_ENABLED and SILLY_ENABLED then
 				local now = tick()
 				
 				-- Refresh clickables cache every 3 seconds
@@ -1647,9 +2176,13 @@ end
 					clickablesCache = scanClickables(rootPart.Position)
 					lastClickableScan = now
 					if #clickablesCache > 0 then
-						debugPrint("[CLICK] Found " .. #clickablesCache .. " clickables nearby")
+						if SILLY_ENABLED then
+							debugPrint("[CLICK] Found " .. #clickablesCache .. " clickables nearby")
+						end
 					else
-						debugPrint("[CLICK] No clickables found within " .. CLICK_SEARCH_RADIUS .. " studs")
+						if SILLY_ENABLED then
+							debugPrint("[CLICK] No clickables found within " .. CLICK_SEARCH_RADIUS .. " studs")
+						end
 					end
 				end
 				
@@ -1657,7 +2190,9 @@ end
 				if nextClickTime == 0 and #clickablesCache > 0 then
 					local delay = math.random(MIN_CLICK_DELAY * 10, MAX_CLICK_DELAY * 10) / 10
 					nextClickTime = now + delay
-					debugPrint("[CLICK] Next click in " .. string.format("%.1f", delay) .. "s")
+					if SILLY_ENABLED then
+						debugPrint("[CLICK] Next click in " .. string.format("%.1f", delay) .. "s")
+					end
 				end
 				
 				-- Time to click!
@@ -1673,14 +2208,20 @@ end
 						if sillyActive then
 							sillyActive = false
 							currentSillySequence = nil
-							debugPrint("[CLICK] Cancelled silly mode due to click")
+							if SILLY_ENABLED then
+								debugPrint("[CLICK] Cancelled silly mode due to click")
+							end
 						end
 						
 						victimStillTimer = 0
 						sillyJustCompleted = true
-						debugPrint("[CLICK] Disabled silly mode until victim moves away")
+						if SILLY_ENABLED then
+							debugPrint("[CLICK] Disabled silly mode until victim moves away")
+						end
 					else
-						debugPrint("[CLICK] Click failed, will try again later")
+						if SILLY_ENABLED then
+							debugPrint("[CLICK] Click failed, will try again later")
+						end
 					end
 				end
 			end
@@ -1690,12 +2231,22 @@ end
 			-- Reset click timer when leaving side-stand
 			if nextClickTime ~= 0 then
 				nextClickTime = 0
-				debugPrint("[CLICK] Reset timer - left side-stand")
+				if SILLY_ENABLED then
+					debugPrint("[CLICK] Reset timer - left side-stand")
+				end
 			end
 		end
 
-				-- ===== CHASE WHEN OUTSIDE 8 STUDS =====
+		-- ===== CHASE WHEN OUTSIDE 8 STUDS =====
 		if distance > EXIT_DISTANCE then
+			-- Anti-void: victim may have walked off a ledge; don't follow
+			if not isSafePosition(targetRoot.Position) then
+				holdW(false)
+				setSprint(false)
+				debugPrint("[ANTI-VOID] Target position unsafe - holding position")
+				return
+			end
+
 			holdW(true)
 			
 			if distance >= SPRINT_DISTANCE and not shiftTested and testPhase == 0 and victimHasMovedSinceStart then
@@ -1718,10 +2269,10 @@ end
 				return
 			end
 
-									local needRecompute = false
+			local needRecompute = false
 			if not currentPath then
 				needRecompute = true
-				debugPrint("[PATH] Computing initial path")
+				-- NOTE: debug print moved BELOW the cooldown checks
 			elseif lastPathTarget then
 				local targetDrift = (targetRoot.Position - lastPathTarget).Magnitude
 				if targetDrift > 50 then
@@ -1739,12 +2290,12 @@ end
 				needRecompute = false
 			end
 			
-			-- Prevent path spam - only compute every 0.5 seconds max
 			if needRecompute and (now - lastPathUpdate) < 0.5 then
 				needRecompute = false
 			end
 
 			if needRecompute then
+				debugPrint("[PATH] Computing initial path")  -- ← moved here, only fires when actually computing
 				lastPathUpdate = now
 				if isSafePosition(targetRoot.Position) then
 					local path = PathfindingService:CreatePath({
@@ -1824,6 +2375,7 @@ end
 --  Button wiring
 -- ══════════════════════════════════════════════
 FollowButton.MouseButton1Click:Connect(function()
+	buttonPress(FollowButton)
 	local searchText = SearchBar.Text
 	if searchText == "" then
 		Status.Text = "Enter a name"
@@ -1848,15 +2400,27 @@ FollowButton.MouseButton1Click:Connect(function()
 end)
 
 CancelButton.MouseButton1Click:Connect(function()
+	buttonPress(CancelButton)
 	print("[CANCEL] Stopped by user")
 	stopFollowing()
 	Status.Text = "Ready"
 	Status.TextColor3 = Color3.fromRGB(180, 180, 190)
 end)
 
-SillyButton.MouseButton1Click:Connect(toggleSillyMode)
-CameraButton.MouseButton1Click:Connect(toggleCameraMode)
-DebugButton.MouseButton1Click:Connect(toggleDebugMode)
+SillyButton.MouseButton1Click:Connect(function()
+    buttonPress(SillyButton)
+    toggleSillyMode()
+end)
+
+CameraButton.MouseButton1Click:Connect(function()
+    buttonPress(CameraButton)
+    toggleCameraMode()
+end)
+
+DebugButton.MouseButton1Click:Connect(function()
+    buttonPress(DebugButton)
+    toggleDebugMode()
+end)
 
 player.CharacterAdded:Connect(function()
 	print("[RESPAWN] Character respawned")
@@ -1872,6 +2436,12 @@ player.CharacterAdded:Connect(function()
 		currentSillySequence = nil
 		sillyLastPosition = nil
 		sillyStuckTimer = 0
+		
+		-- small delay
+		task.wait(0.2)
+		currentPath = nil
+		lastPathUpdate = 0
+		print("[RESPAWN] Path cleared - will recompute")
 	end
 	shiftTested = false
 	testPhase = 0
