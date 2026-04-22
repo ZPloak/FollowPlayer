@@ -605,6 +605,8 @@ local lastVictimPromptScan = 0
 local lastBlockerName = nil
 local blockCount = 0
 local isMovingAside = false
+local lastSocialCheck = 0
+local stareLingerUntil = 0
 
 -- Timestamp function (HH:MM:SS.mmm)
 local function getTimestamp()
@@ -1263,16 +1265,26 @@ end
 		end
 
 						-- ===== NEW SIMPLE SOCIAL: Step aside when blocked =====
-		if NEW_SOCIAL_ENABLED and staringActive and not isMovingAside and not sillyActive then
+		if NEW_SOCIAL_ENABLED and not isMovingAside and not sillyActive then
 			local now = tick()
+			local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
 			
-			-- Check cooldown
-			if not lastSocialCheck or now - lastSocialCheck >= 1.5 then
-				
+			-- Update linger timer when victim is looking
+			if victimLooking then
+				stareLingerUntil = now + 4.0
+			end
+			
+			-- Active if victim is looking OR within linger period
+			local isActive = victimLooking or (stareLingerUntil and now < stareLingerUntil)
+			
+			if isActive then
 				local isBlocked, blocker = isSomeoneBlocking(rootPart, targetRoot)
 				
 				if isBlocked and blocker then
 					local blockerName = blocker.DisplayName
+					
+					-- Reset linger timer when blocked
+					stareLingerUntil = now + 4.0
 					
 					-- Check if it's the same person as before
 					if blockerName == lastBlockerName then
@@ -1284,15 +1296,14 @@ end
 					
 					debugPrint("[SOCIAL] " .. blockerName .. " is blocking! Waiting 2s... (Count: " .. blockCount .. ")")
 					
-					isMovingAside = true  -- Prevent multiple triggers
+					isMovingAside = true
 					
-					-- Wait 2 seconds before reacting
+					-- Wait 2 seconds
 					task.wait(2.0)
 					
-					-- Check if still blocked and still staring after the delay
-					if not staringActive or not targetRoot or not rootPart then
+					-- Check if still blocked after delay
+					if not targetRoot or not rootPart then
 						isMovingAside = false
-						lastSocialCheck = tick()  -- Reset cooldown timer
 						return
 					end
 					
@@ -1300,57 +1311,76 @@ end
 					if not stillBlocked then
 						debugPrint("[SOCIAL] Blocker left during delay, cancelling")
 						isMovingAside = false
-						lastSocialCheck = tick()  -- Reset cooldown timer
 						return
 					end
 					
 					-- Decide where to move
-					local direction = (targetRoot.Position - rootPart.Position).Unit
-					local perpendicular = Vector3.new(-direction.Z, 0, direction.X)
-					
-					-- If persistent (3+ blocks), move to victim's side
-					local moveDirection = perpendicular
 					if blockCount >= PERSISTENT_BLOCK_THRESHOLD then
-						moveDirection = (blockCount % 2 == 1) and perpendicular or -perpendicular
-						debugPrint("[SOCIAL] Persistent blocker! Moving to victim's side")
-					else
-						moveDirection = (blockCount % 2 == 1) and perpendicular or -perpendicular
-						debugPrint("[SOCIAL] Stepping aside")
-					end
-					
-					-- Calculate destination
-					local finalTarget = rootPart.Position + moveDirection * STEP_DISTANCE
-					
-					-- Smooth walk to destination
-					local moveTime = 0
-					while moveTime < 1.5 do
-						if not targetRoot or not rootPart then break end
+						debugPrint("[SOCIAL] Persistent blocker! Moving to victim's side using side-stand")
 						
-						smoothMove(humanoid, finalTarget)
+						-- KILL LINGER AND STARING - stop looking completely
+						stareLingerUntil = 0
+						staringActive = false
 						
-						-- Maintain eye contact
-						local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
-						if flatDir.Magnitude > 0.1 then
-							local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
-							rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.1)
+						-- Use the existing side-stand feature
+						inSideStand = true
+						sideReached = false
+						currentSide = (blockCount % 2 == 1) and "left" or "right"
+						local sidePos = getSidePosition(targetRoot, currentSide).Position
+						if isSafePosition(sidePos) then
+							sideTargetPosition = sidePos
+						else
+							local otherSide = (currentSide == "left") and "right" or "left"
+							local altPos = getSidePosition(targetRoot, otherSide).Position
+							sideTargetPosition = isSafePosition(altPos) and altPos or targetRoot.Position
 						end
 						
-						if (rootPart.Position - finalTarget).Magnitude < 1.5 then break end
+						-- Wait for side-stand to complete
+						local waitTime = 0
+						while waitTime < 2.0 do
+							if sideReached then break end
+							task.wait(0.1)
+							waitTime = waitTime + 0.1
+						end
 						
-						task.wait(0.1)
-						moveTime = moveTime + 0.1
+						-- Reset count after moving to victim's side
+						blockCount = 0
+						lastBlockerName = nil
+						
+					else
+						-- Just step aside (count 1-2) - KEEP LOOKING
+						local direction = (targetRoot.Position - rootPart.Position).Unit
+						local perpendicular = Vector3.new(-direction.Z, 0, direction.X)
+						local moveDirection = (blockCount % 2 == 1) and perpendicular or -perpendicular
+						debugPrint("[SOCIAL] Stepping aside")
+						
+						local finalTarget = rootPart.Position + moveDirection * STEP_DISTANCE
+						local moveTime = 0
+						while moveTime < 1.5 do
+							if not targetRoot or not rootPart then break end
+							smoothMove(humanoid, finalTarget)
+							if (rootPart.Position - finalTarget).Magnitude < 1.5 then break end
+							task.wait(0.1)
+							moveTime = moveTime + 0.1
+						end
 					end
 					
 					debugPrint("[SOCIAL] Finished moving")
-					isMovingAside = false  -- Ready for next detection
-					lastSocialCheck = tick()  -- Start 1.5s cooldown
+					
+					-- Wait 1 second before allowing another trigger
+					task.wait(1.0)
+					
+					isMovingAside = false
 					
 				else
 					-- No blocker, reset count
 					lastBlockerName = nil
 					blockCount = 0
-					lastSocialCheck = tick()
 				end
+			else
+				-- Not active, reset count
+				lastBlockerName = nil
+				blockCount = 0
 			end
 		end
 
@@ -1422,68 +1452,74 @@ end
 			victimStillTimer = 0
 		end
 
-												-- ===== VICTIM PROMPT CLICK (FOR DUET EMOTES - WITH COOLDOWN) =====
+										-- ===== VICTIM PROMPT CLICK (FOR DUET EMOTES - WITH COOLDOWN) =====
 		if RANDOM_CLICK_ENABLED and targetRoot and not sillyActive then
 			local now = tick()
-			if now - lastVictimPromptScan > 3 then  -- Only scan every 3 seconds
+			if now - lastVictimPromptScan > 2 then  -- Only scan every 2 seconds
 				lastVictimPromptScan = now
 				
-				-- Scan victim's character for prompts
+				-- Collect ALL prompts on victim first
+				local victimPrompts = {}
 				for _, obj in ipairs(targetChar:GetDescendants()) do
 					if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
 						local parent = obj.Parent
 						if parent and parent:IsA("BasePart") then
 							local dist = (parent.Position - rootPart.Position).Magnitude
 							if dist <= 8 then  -- Within 8 studs
-								debugPrint("[DUET] Found prompt on victim: " .. obj.Parent.Name .. " - clicking in 1.0s")
-								
-								-- Reset silly timer immediately so it doesn't trigger during the 1s wait
-								victimStillTimer = 0
-								
-								task.wait(1.0)
-								
-								if not targetChar or not targetChar.Parent then return end
-								local newDist = (parent.Position - rootPart.Position).Magnitude
-								if newDist > 8 then
-									debugPrint("[DUET] Victim moved too far, cancelling")
-									break
-								end
-								
-								local success = pcall(function()
-									if obj:IsA("ClickDetector") then
-										obj:Fire()
-									elseif obj:IsA("ProximityPrompt") then
-										local holdTime = obj.HoldDuration or 0
-										if holdTime > 0 then
-											obj:InputHoldBegin()
-											task.wait(holdTime + 0.05)
-											obj:InputHoldEnd()
-										else
-											obj:InputHoldBegin()
-											task.wait(0.05)
-											obj:InputHoldEnd()
-										end
-									end
-								end)
-								
-								if success then
-									debugPrint("Successfully clicked Victim's ProximityPrompt!")
-									lastVictimPromptScan = now + 2  -- 5 second cooldown after success
-									
-									-- Reset silly timer again after success
-									victimStillTimer = 0
-									sillyJustCompleted = true
-									
-									-- Cancel any active silly sequence
-									if sillyActive then
-										sillyActive = false
-										currentSillySequence = nil
-										debugPrint("Cancelled silly mode")
-									end
-									
-									break
-								end
+								table.insert(victimPrompts, obj)
 							end
+						end
+					end
+				end
+				
+				-- If we found prompts, click them ALL instantly
+				if #victimPrompts > 0 then
+					debugPrint("Found " .. #victimPrompts .. " prompt(s) on victim - clicking now")
+					
+					-- Reset silly timer immediately
+					victimStillTimer = 0
+					
+					if not targetChar or not targetChar.Parent then return end
+					
+					-- Click ALL collected prompts
+					local anySuccess = false
+					for _, obj in ipairs(victimPrompts) do
+						local parent = obj.Parent
+						local newDist = (parent.Position - rootPart.Position).Magnitude
+						if newDist <= 8 then
+							pcall(function()
+								if obj:IsA("ClickDetector") then
+									obj:Fire()
+								elseif obj:IsA("ProximityPrompt") then
+									local holdTime = obj.HoldDuration or 0
+									if holdTime > 0 then
+										obj:InputHoldBegin()
+										task.wait(holdTime + 0.05)
+										obj:InputHoldEnd()
+									else
+										obj:InputHoldBegin()
+										task.wait(0.05)
+										obj:InputHoldEnd()
+									end
+								end
+							end)
+							anySuccess = true
+						end
+					end
+					
+					if anySuccess then
+						debugPrint("Successfully clicked Victim's ProximityPrompt!")
+						lastVictimPromptScan = now + 1  -- 1 second cooldown after success
+						
+						-- Reset silly timer again after success
+						victimStillTimer = 0
+						sillyJustCompleted = true
+						
+						-- Cancel any active silly sequence
+						if sillyActive then
+							sillyActive = false
+							currentSillySequence = nil
+							debugPrint("Cancelled silly mode")
 						end
 					end
 				end
