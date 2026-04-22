@@ -635,6 +635,11 @@ local cameraOffline = false
 local stareTimer = 0
 local actionData = {}
 
+local postSillyReaction = false
+local postSillyReactionChance = 0
+local postSillyReactionTimer = 0
+local postSillyReactionType = ""  -- "mimic", "stare", or "none"
+
 -- Actions list
 local ACTIONS = {"Kiss", "Friendly Jump", "Headpat"}
 
@@ -1290,6 +1295,25 @@ local function doHeadpat(humanoid, rootPart, targetRoot, camera)
     debugPrint("[ACTION] Headpat completed!")
 end
 
+-- ===== POST-SILLY REACTION FUNCTION =====
+local function triggerPostSillyReaction()
+	-- 50% stare, 50% mimic
+	local roll = math.random(1, 100)
+	
+	if roll <= 50 then
+		-- 50% chance - stare at victim
+		postSillyReactionType = "stare"
+		debugPrint("[POST-SILLY] Will stare at victim")
+	else
+		-- 50% chance - mimic victim's direction
+		postSillyReactionType = "mimic"
+		debugPrint("[POST-SILLY] Will mimic victim's direction")
+	end
+	
+	postSillyReaction = true
+	postSillyReactionTimer = 0
+end
+
 -- ══════════════════════════════════════════════
 --  Main follow loop
 -- ══════════════════════════════════════════════
@@ -1728,14 +1752,17 @@ if targetRoot and rootPart then
                         actionData.jumpTriggered = false
                         debugPrint("[ACTION] Friendly Jump - repeat " .. actionData.currentRepeat .. "/" .. actionData.repeatCount)
                     else
-                        -- Action finished
+                          -- Action finished
                         actionActive = false
                         currentAction = nil
                         actionCooldown = true
                         sillyTimerPaused = false
                         CAMERA_ENABLED = true
                         inSideStand = true
-                        debugPrint("[ACTION] " .. (currentAction == "Kiss" and "Kiss" or currentAction == "Friendly Jump" and "Friendly Jump" or "Headpat") .. " completed!")
+                        debugPrint("[ACTION] Completed!")
+                        
+                        -- Trigger post-silly reaction
+                        triggerPostSillyReaction()
                     end
                 end
             end
@@ -1759,9 +1786,46 @@ if targetRoot and rootPart then
                 end
             end
             
-            if now - lastVictimLookTime > 5.0 then
+            if now - lastVictimLookTime > 2.0 then
                 mimicActive = false
-                debugPrint("[MIMIC] Ended after 5 seconds")
+                debugPrint("[MIMIC] Ended after 2 seconds")
+            end
+            
+            return
+        end
+
+		-- ===== POST-SILLY REACTION (delay then react) =====
+        if postSillyReaction and not actionActive and not mimicActive and not staringActive then
+            postSillyReactionTimer = postSillyReactionTimer + deltaTime
+            
+            -- Random delay between 0.5 and 1.0 seconds
+            local delayTime = 0.5 + (postSillyReactionChance * 0.5)
+            if postSillyReactionChance == 0 then
+                postSillyReactionChance = math.random()
+                delayTime = 0.5 + (postSillyReactionChance * 0.5)
+                debugPrint("[POST-SILLY] Delay: " .. string.format("%.2f", delayTime) .. "s")
+            end
+            
+            if postSillyReactionTimer >= delayTime then
+                if postSillyReactionType == "stare" then
+                    -- Activate staring for 2 seconds
+                    staringActive = true
+                    stareEndTime = now + 2.0
+                    debugPrint("[POST-SILLY] Now staring at victim for 2s")
+                elseif postSillyReactionType == "mimic" then
+                    -- Activate mimic for 2 seconds
+                    mimicActive = true
+                    lastVictimLookTime = now
+                    debugPrint("[POST-SILLY] Now mimicking victim for 2s")
+                else
+                    debugPrint("[POST-SILLY] Doing nothing")
+                end
+                
+                -- Reset post-silly state
+                postSillyReaction = false
+                postSillyReactionChance = 0
+                postSillyReactionTimer = 0
+                postSillyReactionType = ""
             end
             
             return
@@ -2117,6 +2181,9 @@ end
 				sideReached = false
 				currentSillySequence = nil
 				sillyLastPosition = nil
+				
+				-- Trigger post-silly reaction
+				triggerPostSillyReaction()
 			end
 			return
 		end
@@ -2130,12 +2197,23 @@ end
 			nextClickTime = 0
 		end
 
-		if not inSideStand and not victimIsMoving and distance <= ENTER_DISTANCE and victimHasMovedSinceStart then
+				if not inSideStand and not victimIsMoving and distance <= ENTER_DISTANCE and victimHasMovedSinceStart then
 			if not sillyActive and victimStillTimer < 8 and not sillyJustCompleted then
 				debugPrint("[SIDE] Entering side-stand (inside 8 studs, victim stopped)")
 				inSideStand = true
 				holdW(false)
 				setSprint(false)
+				
+				-- Cancel shiftlock if it was accidentally enabled
+				if not shiftIsSprint then
+					pcall(function()
+						VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+						task.wait(0.05)
+						VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+					end)
+					debugPrint("[SHIFTLOCK] Cancelled shiftlock")
+				end
+				
 				sideReached = false
 				currentSide = (math.random(1, 2) == 1) and "left" or "right"
 				local sidePos = getSidePosition(targetRoot, currentSide).Position
