@@ -216,9 +216,10 @@ local VEHICLE_SEAT_DELAY_MIN      = 0.5
 local VEHICLE_SEAT_DELAY_MAX      = 2.0
 local VEHICLE_SEARCH_RADIUS       = 20
 
--- Social Awareness Settings
-local SOCIAL_AWARENESS_ENABLED      = true
-local BLOCKED_MOVE_DISTANCE         = 3
+-- Social Settings
+local NEW_SOCIAL_ENABLED            = true
+local STEP_DISTANCE                 = 3 
+local PERSISTENT_BLOCK_THRESHOLD    = 3       
 
 -- ══════════════════════════════════════════════
 --  GUI
@@ -601,8 +602,9 @@ local lastVehicleScan = 0
 
 local lastVictimPromptScan = 0
 
-local lastBlockedCheck = 0
-local isAdjustingPosition = false
+local lastBlockerName = nil
+local blockCount = 0
+local isMovingAside = false
 
 -- Timestamp function (HH:MM:SS.mmm)
 local function getTimestamp()
@@ -1022,68 +1024,33 @@ local function clickRandomObject()
 	return success
 end
 
--- Function: Check if someone is blocking the view
-local function getBlockerInFront(rootPart, targetRoot)
+-- NEW Simple function: Check if someone is between follower and victim
+local function isSomeoneBlocking(rootPart, targetRoot)
 	local direction = (targetRoot.Position - rootPart.Position).Unit
 	local distance = (targetRoot.Position - rootPart.Position).Magnitude
 	
-	-- Raycast from follower to victim
-	local rayParams = RaycastParams.new()
-	rayParams.FilterType = Enum.RaycastFilterType.Exclude
-	rayParams.FilterDescendantsInstances = {rootPart.Parent, targetRoot.Parent}
-	
-	local rayResult = Workspace:Raycast(rootPart.Position, direction * distance, rayParams)
-	
-	if rayResult then
-		local hitPart = rayResult.Instance
-		local hitPlayer = Players:GetPlayerFromCharacter(hitPart.Parent)
-		if hitPlayer and hitPlayer ~= player and hitPlayer ~= targetPlayer then
-			return hitPlayer, rayResult.Position
-		end
-	end
-	
-	return nil, nil
-end
-
--- Function: Find an available spot to move to
-local function findClearSpot(rootPart, targetRoot, blockerPos)
-	local direction = (targetRoot.Position - rootPart.Position).Unit
-	local perpendicular = Vector3.new(-direction.Z, 0, direction.X) -- Left direction
-	
-	local spots = {
-		rootPart.Position + perpendicular * BLOCKED_MOVE_DISTANCE,  -- Left
-		rootPart.Position - perpendicular * BLOCKED_MOVE_DISTANCE,  -- Right
-	}
-	
-	for _, spot in ipairs(spots) do
-		-- Check if spot is safe (raycast down for ground)
-		local rayParams = RaycastParams.new()
-		rayParams.FilterType = Enum.RaycastFilterType.Exclude
-		rayParams.FilterDescendantsInstances = {rootPart.Parent}
-		
-		local groundCheck = Workspace:Raycast(spot + Vector3.new(0, 3, 0), Vector3.new(0, -5, 0), rayParams)
-		if groundCheck then
-			-- Check if spot isn't blocked by another player
-			local clear = true
-			for _, otherPlayer in ipairs(Players:GetPlayers()) do
-				if otherPlayer ~= player and otherPlayer.Character then
-					local otherRoot = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
-					if otherRoot then
-						if (otherRoot.Position - spot).Magnitude < 2.5 then
-							clear = false
-							break
-						end
+	-- Simple check: Is there another player within 2 studs of the line between us?
+	for _, otherPlayer in ipairs(Players:GetPlayers()) do
+		if otherPlayer ~= player and otherPlayer ~= targetPlayer and otherPlayer.Character then
+			local otherRoot = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+			if otherRoot then
+				-- Check if this player is between us
+				local toOther = otherRoot.Position - rootPart.Position
+				local dot = toOther:Dot(direction)
+				if dot > 0 and dot < distance then
+					-- They're between us! Check if they're close to the line
+					local projection = rootPart.Position + direction * dot
+					local distFromLine = (otherRoot.Position - projection).Magnitude
+					if distFromLine < 3 then
+						return true, otherPlayer
 					end
 				end
 			end
-			if clear then
-				return spot
-			end
 		end
 	end
-	
-	return nil
+	return false, nil
 end
+
 
 -- ══════════════════════════════════════════════
 --  Main follow loop
@@ -1295,50 +1262,94 @@ end
 			end
 		end
 
-						-- ===== SOCIAL AWARENESS: Move if someone blocks the view =====
-		if SOCIAL_AWARENESS_ENABLED and staringActive and not isAdjustingPosition and not sillyActive then
+						-- ===== NEW SIMPLE SOCIAL: Step aside when blocked =====
+		if NEW_SOCIAL_ENABLED and staringActive and not isMovingAside and not sillyActive then
 			local now = tick()
-			if now - lastBlockedCheck > 2 then  -- Check every 2 seconds
-				lastBlockedCheck = now
+			
+			-- Check cooldown
+			if not lastSocialCheck or now - lastSocialCheck >= 1.5 then
 				
-				local blocker, blockerPos = getBlockerInFront(rootPart, targetRoot)
-				if blocker then
-					debugPrint("[SOCIAL] " .. blocker.DisplayName .. " is blocking the view! Moving aside...")
+				local isBlocked, blocker = isSomeoneBlocking(rootPart, targetRoot)
+				
+				if isBlocked and blocker then
+					local blockerName = blocker.DisplayName
 					
-					local newSpot = findClearSpot(rootPart, targetRoot, blockerPos)
-					if newSpot then
-						isAdjustingPosition = true
+					-- Check if it's the same person as before
+					if blockerName == lastBlockerName then
+						blockCount = blockCount + 1
+					else
+						lastBlockerName = blockerName
+						blockCount = 1
+					end
+					
+					debugPrint("[SOCIAL] " .. blockerName .. " is blocking! Waiting 2s... (Count: " .. blockCount .. ")")
+					
+					isMovingAside = true  -- Prevent multiple triggers
+					
+					-- Wait 2 seconds before reacting
+					task.wait(2.0)
+					
+					-- Check if still blocked and still staring after the delay
+					if not staringActive or not targetRoot or not rootPart then
+						isMovingAside = false
+						lastSocialCheck = tick()  -- Reset cooldown timer
+						return
+					end
+					
+					local stillBlocked, _ = isSomeoneBlocking(rootPart, targetRoot)
+					if not stillBlocked then
+						debugPrint("[SOCIAL] Blocker left during delay, cancelling")
+						isMovingAside = false
+						lastSocialCheck = tick()  -- Reset cooldown timer
+						return
+					end
+					
+					-- Decide where to move
+					local direction = (targetRoot.Position - rootPart.Position).Unit
+					local perpendicular = Vector3.new(-direction.Z, 0, direction.X)
+					
+					-- If persistent (3+ blocks), move to victim's side
+					local moveDirection = perpendicular
+					if blockCount >= PERSISTENT_BLOCK_THRESHOLD then
+						moveDirection = (blockCount % 2 == 1) and perpendicular or -perpendicular
+						debugPrint("[SOCIAL] Persistent blocker! Moving to victim's side")
+					else
+						moveDirection = (blockCount % 2 == 1) and perpendicular or -perpendicular
+						debugPrint("[SOCIAL] Stepping aside")
+					end
+					
+					-- Calculate destination
+					local finalTarget = rootPart.Position + moveDirection * STEP_DISTANCE
+					
+					-- Smooth walk to destination
+					local moveTime = 0
+					while moveTime < 1.5 do
+						if not targetRoot or not rootPart then break end
 						
-						-- Save original stare state
-						local wasStaring = staringActive
+						smoothMove(humanoid, finalTarget)
 						
-						-- Move to the new spot while maintaining stare
-						local moveTime = 0
-						while moveTime < 1.5 do
-							if not targetRoot or not rootPart then break end
-							
-							-- Move toward new spot
-							smoothMove(humanoid, newSpot)
-							
-							-- FORCE maintain eye contact with victim while moving
-							if targetRoot and rootPart then
-								local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
-								if flatDir.Magnitude > 0.1 then
-									local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
-									rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.15)
-								end
-							end
-							
-							if (rootPart.Position - newSpot).Magnitude < 1 then break end
-							task.wait(0.1)
-							moveTime = moveTime + 0.1
+						-- Maintain eye contact
+						local flatDir = Vector3.new(targetRoot.Position.X - rootPart.Position.X, 0, targetRoot.Position.Z - rootPart.Position.Z)
+						if flatDir.Magnitude > 0.1 then
+							local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
+							rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.1)
 						end
 						
-						isAdjustingPosition = false
-						debugPrint("[SOCIAL] Repositioned!")
-					else
-						debugPrint("[SOCIAL] Blocked but no clear spot available")
+						if (rootPart.Position - finalTarget).Magnitude < 1.5 then break end
+						
+						task.wait(0.1)
+						moveTime = moveTime + 0.1
 					end
+					
+					debugPrint("[SOCIAL] Finished moving")
+					isMovingAside = false  -- Ready for next detection
+					lastSocialCheck = tick()  -- Start 1.5s cooldown
+					
+				else
+					-- No blocker, reset count
+					lastBlockerName = nil
+					blockCount = 0
+					lastSocialCheck = tick()
 				end
 			end
 		end
