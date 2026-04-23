@@ -1611,7 +1611,7 @@ local function startFollowing()
 					
 					if actionIndex <= #actionSequence then
 						local data = actionSequence[actionIndex]
-						local movePos     = targetRoot.Position + data[1]
+						local movePos = targetRoot.Position + data[1]
 						local victimAngle = math.atan2(-targetRoot.CFrame.LookVector.X, -targetRoot.CFrame.LookVector.Z)
 						local targetAngle = data[2] + victimAngle
 						local doJump = data[3]
@@ -2040,17 +2040,18 @@ local function startFollowing()
 				end
 			end
 			
-			if sillyIndex <= #currentSillySequence then
-				local data = currentSillySequence[sillyIndex]
+					if sillyIndex <= #currentSillySequence then
+			local data = currentSillySequence[sillyIndex]
 
-				local movePos     = targetRoot.Position + data[1]
-				local targetAngle = data[2]
-				local doJump      = data[3]
-				local doStop      = data[4]
+			local movePos     = targetRoot.Position + data[1]
+			local victimAngle = math.atan2(-targetRoot.CFrame.LookVector.X, -targetRoot.CFrame.LookVector.Z)
+			local targetAngle = data[2] + victimAngle
+			local doJump      = data[3]
+			local doStop      = data[4]
 
-				local currentAngle = math.atan2(-rootPart.CFrame.LookVector.X, -rootPart.CFrame.LookVector.Z)
-				local smoothAngle  = lerpAngle(currentAngle, targetAngle, deltaTime * 12)
-				rootPart.CFrame = CFrame.new(rootPart.Position) * CFrame.Angles(0, smoothAngle, 0)
+			local currentAngle = math.atan2(-rootPart.CFrame.LookVector.X, -rootPart.CFrame.LookVector.Z)
+			local smoothAngle  = lerpAngle(currentAngle, targetAngle, deltaTime * 12)
+			rootPart.CFrame = CFrame.new(rootPart.Position) * CFrame.Angles(0, smoothAngle, 0)
 
 				if doStop then
 					smoothMove(humanoid, rootPart.Position)
