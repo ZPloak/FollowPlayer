@@ -2119,14 +2119,19 @@ local function startFollowing()
 				holdW(false)
 				setSprint(false)
 				
-				if not shiftIsSprint then
+							if not shiftIsSprint then
+				local shiftLockOn = (player.DevCameraOcclusionMode == Enum.DevCameraOcclusionMode.Invisicam)
+				if shiftLockOn then
 					pcall(function()
 						VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
 						task.wait(0.05)
 						VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
 					end)
-					debugPrint("[SHIFTLOCK] Cancelled shiftlock")
+					debugPrint("[SHIFTLOCK] Shift Lock detected and cancelled")
+				else
+					debugPrint("[SHIFTLOCK] Shift Lock not active - no cancellation needed")
 				end
+			end
 				
 				sideReached = false
 				currentSide = (math.random(1, 2) == 1) and "left" or "right"
