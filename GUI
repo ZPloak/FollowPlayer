@@ -728,6 +728,7 @@ local isInVehicle = false
 local vehicleSeatPrompt = nil
 local lastVehicleScan = 0
 local lastSeatExitTime = 0
+local closestSeatCheckTime = 0
 
 local lastVictimPromptScan = 0
 
@@ -837,7 +838,7 @@ local cachedRaycastParams = nil
 
 local function getRaycastParams()
 	local now = tick()
-	if not cachedRaycastParams or (now - lastIgnoreListUpdate) > 2 then
+	if not cachedRaycastParams or (now - lastIgnoreListUpdate) > 15 then
 		local params = RaycastParams.new()
 		params.FilterType = Enum.RaycastFilterType.Exclude
 		local ignoreList = {}
@@ -1459,17 +1460,31 @@ local function startFollowing()
 			end
 		end
 
-		if followerSeated and targetSeated then
+						if followerSeated and targetSeated and (tick() - closestSeatCheckTime > 1) then
+			closestSeatCheckTime = tick()
 			local currentSeat = humanoid.SeatPart
 			if currentSeat then
 				local distToVictim = (currentSeat.Position - targetRoot.Position).Magnitude
-				if distToVictim > 4 then
+				local hasCloserSeat = false
+				for _, obj in ipairs(Workspace:GetDescendants()) do
+					if (obj:IsA("Seat") or obj:IsA("VehicleSeat")) and obj ~= currentSeat then
+						local isOccupied = (obj.Occupant ~= nil)
+						if not isOccupied then
+							local d = (obj.Position - targetRoot.Position).Magnitude
+							if d < distToVictim - 1 then
+								hasCloserSeat = true
+								break
+							end
+						end
+					end
+				end
+				if hasCloserSeat then
 					humanoid.Sit = false
 					humanoid.Jump = true
 					isInVehicle = false
 					vehicleSeatPrompt = nil
-					lastVehicleScan = 0  -- Reset scan timer to find a new seat immediately
-					debugPrint("[VEHICLE] Wrong seat (too far from victim) - jumping off to find closer seat")
+					lastVehicleScan = 0
+					debugPrint("[VEHICLE] Closer seat found - jumping off to switch")
 				end
 			end
 		end
