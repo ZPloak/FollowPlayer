@@ -1457,7 +1457,7 @@ local function startFollowing()
 		if targetRoot and rootPart then
 			local distanceToVictim = (targetRoot.Position - rootPart.Position).Magnitude
 			
-			if distanceToVictim > 8 or not SILLY_ENABLED then
+			if distanceToVictim > 16 or not SILLY_ENABLED then
 				staringActive = false
 				mimicActive = false
 				if not actionActive then
@@ -1483,7 +1483,7 @@ local function startFollowing()
 					if not staringActive and not stareDelayStart and not actionActive then
 						stareDelayStart = now
 						stareTimer = 0
-						debugPrint("[STARE] Victim looking! Waiting 0.8s...")
+						debugPrint("[STARE] Victim looking! Waiting 0.5s...")
 					elseif staringActive and not actionActive then
 						stareEndTime = now + 0.5
 					end
@@ -1505,7 +1505,7 @@ local function startFollowing()
 				
 				-- ===== ACTIVATE STARING =====
 				if stareDelayStart and not staringActive and not actionActive then
-					if now - stareDelayStart >= 0.8 then
+					if now - stareDelayStart >= 0.5 then
 						staringActive = true
 						stareEndTime = now + 0.5
 						stareDelayStart = nil
