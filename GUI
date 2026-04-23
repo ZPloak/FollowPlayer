@@ -742,6 +742,7 @@ local lastVictimLookTime = 0
 local mimicActive = false
 local mimicScheduledTime = 0
 local mimicLastBlockedObject = nil
+local lastViewBlockCheck = 0
 
 local lastPathUpdate = 0
 local currentPath = nil
@@ -1379,40 +1380,38 @@ local function startFollowing()
 				
 				local nearbySeats = {}
 				
-				-- Search for actual Seat parts near the victim
-				for _, obj in ipairs(Workspace:GetDescendants()) do
+					-- Search for actual Seat parts near the victim
+				local partsNearVictim = Workspace:GetPartBoundsInRadius(targetRoot.Position, 8)
+				for _, obj in ipairs(partsNearVictim) do
 					if obj:IsA("Seat") or obj:IsA("VehicleSeat") then
-						local dist = (obj.Position - targetRoot.Position).Magnitude
-						-- Check if seat is unoccupied
 						local isOccupied = (obj.Occupant ~= nil)
-						if dist <= 8 and not isOccupied then
+						if not isOccupied then
+							local dist = (obj.Position - targetRoot.Position).Magnitude
 							table.insert(nearbySeats, {part = obj, dist = dist, prompt = nil})
 						end
 					end
 				end
 				
 				-- Also search for ProximityPrompts on seats near the victim
-				for _, obj in ipairs(Workspace:GetDescendants()) do
-					if obj:IsA("ProximityPrompt") then
-						local parent = obj.Parent
+				for _, obj in ipairs(partsNearVictim) do
+					local prompt = obj:FindFirstChildWhichIsA("ProximityPrompt")
+					if prompt and prompt.Enabled then
+						local parent = obj
 						if parent and parent:IsA("BasePart") then
-							local dist = (parent.Position - targetRoot.Position).Magnitude
-							if dist <= 8 then
-								local isSeat = parent:IsA("Seat") or parent:IsA("VehicleSeat") or parent.Name:lower():find("seat")
-								-- Check if seat is unoccupied
-								local isOccupied = parent:IsA("Seat") and parent.Occupant ~= nil
-								if isSeat and obj.Enabled and not isOccupied then
-									local alreadyAdded = false
-									for _, s in ipairs(nearbySeats) do
-										if s.part == parent then
-											s.prompt = obj
-											alreadyAdded = true
-											break
-										end
+							local isSeat = parent:IsA("Seat") or parent:IsA("VehicleSeat") or parent.Name:lower():find("seat")
+							local isOccupied = parent:IsA("Seat") and parent.Occupant ~= nil
+							if isSeat and not isOccupied then
+								local alreadyAdded = false
+								local dist = (parent.Position - targetRoot.Position).Magnitude
+								for _, s in ipairs(nearbySeats) do
+									if s.part == parent then
+										s.prompt = prompt
+										alreadyAdded = true
+										break
 									end
-									if not alreadyAdded then
-										table.insert(nearbySeats, {part = parent, dist = dist, prompt = obj})
-									end
+								end
+								if not alreadyAdded then
+									table.insert(nearbySeats, {part = parent, dist = dist, prompt = prompt})
 								end
 							end
 						end
@@ -1444,6 +1443,8 @@ local function startFollowing()
 								if not targetSeated or followerSeated then break end
 								smoothMove(humanoid, seatPos)
 								if (rootPart.Position - seatPos).Magnitude < 3 then
+									humanoid:MoveTo(rootPart.Position)  -- Stop movement
+									task.wait(0.2)  -- Brief pause to stabilize
 									humanoid.Sit = true
 									break
 								end
@@ -1466,7 +1467,8 @@ local function startFollowing()
 			if currentSeat then
 				local distToVictim = (currentSeat.Position - targetRoot.Position).Magnitude
 				local hasCloserSeat = false
-				for _, obj in ipairs(Workspace:GetDescendants()) do
+				local partsNearVictim = Workspace:GetPartBoundsInRadius(targetRoot.Position, 8)
+				for _, obj in ipairs(partsNearVictim) do
 					if (obj:IsA("Seat") or obj:IsA("VehicleSeat")) and obj ~= currentSeat then
 						local isOccupied = (obj.Occupant ~= nil)
 						if not isOccupied then
@@ -1528,9 +1530,10 @@ local function startFollowing()
 			end
 		end
 
-		-- ===== STARING CONTEST + MIMIC + SILLY ACTIONS =====
+				-- ===== STARING CONTEST + MIMIC + SILLY ACTIONS =====
 		if targetRoot and rootPart then
 			local distanceToVictim = (targetRoot.Position - rootPart.Position).Magnitude
+			local now = tick()
 			
 			if distanceToVictim > 16 or not SILLY_ENABLED then
 				staringActive = false
@@ -1540,9 +1543,13 @@ local function startFollowing()
 				end
 				sillyTimerPaused = false
 			else
-				local viewBlocked = isVictimViewBlocked(targetRoot, rootPart)
+				local viewBlocked = false
+				if (now - lastViewBlockCheck) > 0.3 then
+					viewBlocked = isVictimViewBlocked(targetRoot, rootPart)
+					lastViewBlockCheck = now
+				end
+				
 				local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart) and not viewBlocked
-				local now = tick()
 				local camera = workspace.CurrentCamera
 				
 				-- ===== VICTIM LOOKING AT FOLLOWER =====
