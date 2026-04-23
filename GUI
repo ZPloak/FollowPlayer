@@ -1463,7 +1463,7 @@ local function startFollowing()
 			local currentSeat = humanoid.SeatPart
 			if currentSeat then
 				local distToVictim = (currentSeat.Position - targetRoot.Position).Magnitude
-				if distToVictim > 8 then
+				if distToVictim > 4 then
 					humanoid.Sit = false
 					humanoid.Jump = true
 					isInVehicle = false
