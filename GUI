@@ -1366,50 +1366,103 @@ local function startFollowing()
 			Status.Text = "Getting off seat"
 		end
 
-		-- ===== VEHICLE FOLLOW =====
+				-- ===== VEHICLE FOLLOW =====
 		if VEHICLE_FOLLOW_ENABLED and targetSeated and not followerSeated and not sillyActive and not actionActive then
 			local now = tick()
 			
 			if now - lastVehicleScan > 2 then
 				lastVehicleScan = now
 				
-				local nearbyPrompts = {}
+				local nearbySeats = {}
+				
+				-- Search for actual Seat parts near the victim
+				for _, obj in ipairs(Workspace:GetDescendants()) do
+					if obj:IsA("Seat") or obj:IsA("VehicleSeat") then
+						local dist = (obj.Position - targetRoot.Position).Magnitude
+						if dist <= 8 then
+							table.insert(nearbySeats, {part = obj, dist = dist, prompt = nil})
+						end
+					end
+				end
+				
+				-- Also search for ProximityPrompts on seats near the victim
 				for _, obj in ipairs(Workspace:GetDescendants()) do
 					if obj:IsA("ProximityPrompt") then
 						local parent = obj.Parent
 						if parent and parent:IsA("BasePart") then
-							local dist = (parent.Position - rootPart.Position).Magnitude
-							if dist <= VEHICLE_SEARCH_RADIUS then
+							local dist = (parent.Position - targetRoot.Position).Magnitude
+							if dist <= 8 then
 								local isSeat = parent:IsA("Seat") or parent:IsA("VehicleSeat") or parent.Name:lower():find("seat")
 								if isSeat and obj.Enabled then
-									table.insert(nearbyPrompts, obj)
+									local alreadyAdded = false
+									for _, s in ipairs(nearbySeats) do
+										if s.part == parent then
+											s.prompt = obj
+											alreadyAdded = true
+											break
+										end
+									end
+									if not alreadyAdded then
+										table.insert(nearbySeats, {part = parent, dist = dist, prompt = obj})
+									end
 								end
 							end
 						end
 					end
 				end
 				
-				if #nearbyPrompts > 0 then
-					table.sort(nearbyPrompts, function(a, b)
-						return (a.Parent.Position - rootPart.Position).Magnitude < (b.Parent.Position - rootPart.Position).Magnitude
+				if #nearbySeats > 0 then
+					table.sort(nearbySeats, function(a, b)
+						return a.dist < b.dist
 					end)
-					vehicleSeatPrompt = nearbyPrompts[1]
+					
+					local closestSeat = nearbySeats[1]
 					
 					local delay = math.random(VEHICLE_SEAT_DELAY_MIN * 10, VEHICLE_SEAT_DELAY_MAX * 10) / 10
-					debugPrint("[VEHICLE] Found seat! Entering in " .. string.format("%.1f", delay) .. "s")
+					debugPrint("[VEHICLE] Found seat near victim! Entering in " .. string.format("%.1f", delay) .. "s")
 					task.wait(delay)
 					
-					if vehicleSeatPrompt and vehicleSeatPrompt.Enabled and targetSeated and not followerSeated then
-						pcall(function()
-							vehicleSeatPrompt:InputHoldBegin()
-							task.wait(0.1)
-							vehicleSeatPrompt:InputHoldEnd()
-						end)
+					if closestSeat and targetSeated and not followerSeated then
+						if closestSeat.prompt then
+							pcall(function()
+								closestSeat.prompt:InputHoldBegin()
+								task.wait(0.1)
+								closestSeat.prompt:InputHoldEnd()
+							end)
+						else
+							local seatPos = closestSeat.part.Position
+							local walkTime = 0
+							while walkTime < 3 do
+								if not targetSeated or followerSeated then break end
+								smoothMove(humanoid, seatPos)
+								if (rootPart.Position - seatPos).Magnitude < 3 then
+									humanoid.Sit = true
+									break
+								end
+								task.wait(0.1)
+								walkTime = walkTime + 0.1
+							end
+						end
 						debugPrint("[VEHICLE] Entered vehicle!")
 						isInVehicle = true
 					end
 				else
 					debugPrint("[VEHICLE] Victim seated but no available seats found nearby")
+				end
+			end
+		end
+
+		if followerSeated and targetSeated then
+			local currentSeat = humanoid.SeatPart
+			if currentSeat then
+				local distToVictim = (currentSeat.Position - targetRoot.Position).Magnitude
+				if distToVictim > 8 then
+					humanoid.Sit = false
+					humanoid.Jump = true
+					isInVehicle = false
+					vehicleSeatPrompt = nil
+					lastVehicleScan = 0  -- Reset scan timer to find a new seat immediately
+					debugPrint("[VEHICLE] Wrong seat (too far from victim) - jumping off to find closer seat")
 				end
 			end
 		end
