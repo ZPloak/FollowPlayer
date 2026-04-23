@@ -1213,49 +1213,32 @@ local function scanClickables(centerPos)
 	return found
 end
 
--- Function: Click a random object from the cache
-local function clickRandomObject()
-	if #clickablesCache == 0 then 
-		if SILLY_ENABLED then
-			debugPrint("[CLICK] No clickables in cache")
-		end
-		return false 
-	end
+-- Function: Find all clickable objects nearby (world objects only, not players)
+local function scanClickables(centerPos)
+	local found = {}
+	local overlapParams = OverlapParams.new()
+	overlapParams.MaxParts = 100
 	
-	local target = clickablesCache[math.random(1, #clickablesCache)]
-	local targetName = target.Parent and target.Parent.Name or "Unknown"
-	clickablesCache = {}
+	local partsInRadius = Workspace:GetPartBoundsInRadius(centerPos, CLICK_SEARCH_RADIUS, overlapParams)
 	
-	if SILLY_ENABLED then
-		debugPrint("[CLICK] Attempting to click: " .. targetName)
-	end
-	
-	local success = pcall(function()
-		if target:IsA("ClickDetector") then
-			target:Fire()
-		elseif target:IsA("ProximityPrompt") then
-			local holdTime = target.HoldDuration or 0
-			if holdTime > 0 then
-				target:InputHoldBegin()
-				task.wait(holdTime + 0.05)
-				target:InputHoldEnd()
-			else
-				target:InputHoldBegin()
-				task.wait(0.05)
-				target:InputHoldEnd()
+	for _, part in ipairs(partsInRadius) do
+		-- Skip parts that belong to any player's character
+		local belongsToPlayer = false
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr.Character and (part:IsDescendantOf(plr.Character) or part == plr.Character) then
+				belongsToPlayer = true
+				break
 			end
 		end
-	end)
-	
-	if SILLY_ENABLED then
-		if success then
-			debugPrint("[CLICK] Successfully clicked: " .. targetName)
-		else
-			debugPrint("[CLICK] Failed to click: " .. targetName)
+		
+		if not belongsToPlayer then
+			local obj = part:FindFirstChildWhichIsA("ProximityPrompt") or part:FindFirstChildWhichIsA("ClickDetector")
+			if obj then
+				table.insert(found, obj)
+			end
 		end
 	end
-	
-	return success
+	return found
 end
 
 -- NEW Simple function: Check if someone is between follower and victim
@@ -2038,7 +2021,7 @@ local function startFollowing()
 			victimStillTimer = 0
 		end
 
-		-- ===== VICTIM PROMPT CLICK =====
+				-- ===== VICTIM PROMPT CLICK =====
 		if RANDOM_CLICK_ENABLED and targetRoot and not sillyActive and not actionActive then
 			local now = tick()
 			if now - lastVictimPromptScan > 2 then
@@ -2046,7 +2029,7 @@ local function startFollowing()
 				
 				local victimPrompts = {}
 				for _, obj in ipairs(targetChar:GetDescendants()) do
-					if obj:IsA("ProximityPrompt") or obj:IsA("ClickDetector") then
+					if obj:IsA("ProximityPrompt") then
 						local parent = obj.Parent
 						if parent and parent:IsA("BasePart") then
 							local dist = (parent.Position - rootPart.Position).Magnitude
@@ -2070,19 +2053,15 @@ local function startFollowing()
 						local newDist = (parent.Position - rootPart.Position).Magnitude
 						if newDist <= 8 then
 							pcall(function()
-								if obj:IsA("ClickDetector") then
-									obj:Fire()
-								elseif obj:IsA("ProximityPrompt") then
-									local holdTime = obj.HoldDuration or 0
-									if holdTime > 0 then
-										obj:InputHoldBegin()
-										task.wait(holdTime + 0.05)
-										obj:InputHoldEnd()
-									else
-										obj:InputHoldBegin()
-										task.wait(0.05)
-										obj:InputHoldEnd()
-									end
+								local holdTime = obj.HoldDuration or 0
+								if holdTime > 0 then
+									obj:InputHoldBegin()
+									task.wait(holdTime + 0.05)
+									obj:InputHoldEnd()
+								else
+									obj:InputHoldBegin()
+									task.wait(0.05)
+									obj:InputHoldEnd()
 								end
 							end)
 							anySuccess = true
