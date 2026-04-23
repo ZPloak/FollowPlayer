@@ -739,6 +739,7 @@ local lastBlockerCheck = 0
 local lastVictimLookTime = 0
 local mimicActive = false
 local mimicScheduledTime = 0
+local mimicLastBlockedObject = nil
 
 local lastPathUpdate = 0
 local currentPath = nil
@@ -1180,6 +1181,18 @@ local function isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
 	return dotProduct > 0.94
 end
 
+local function isVictimViewBlocked(targetRoot, rootPart)
+	local direction = (rootPart.Position - targetRoot.Position).Unit
+	local distance = (rootPart.Position - targetRoot.Position).Magnitude
+	
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = {targetRoot.Parent, player.Character}
+	
+	local result = Workspace:Raycast(targetRoot.Position, direction * distance, rayParams)
+	return result ~= nil
+end
+
 -- Function: Find all clickable objects nearby
 local function scanClickables(centerPos)
 	local found = {}
@@ -1452,7 +1465,8 @@ local function startFollowing()
 				end
 				sillyTimerPaused = false
 			else
-				local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart)
+				local viewBlocked = isVictimViewBlocked(targetRoot, rootPart)
+				local victimLooking = isVictimLookingAtFollower(targetRoot, targetHumanoid, rootPart) and not viewBlocked
 				local now = tick()
 				local camera = workspace.CurrentCamera
 				
@@ -1673,18 +1687,36 @@ local function startFollowing()
 					return
 				end
 				
-				-- ===== PRIORITY 2: MIMIC =====
+					-- ===== PRIORITY 2: MIMIC =====
 				if mimicActive and not actionActive then
 					local victimLookDir = targetRoot.CFrame.LookVector
-					local flatDir = Vector3.new(victimLookDir.X, 0, victimLookDir.Z)
 					
-					if flatDir.Magnitude > 0.1 then
-						local targetCFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + flatDir.Unit)
+					-- Raycast from victim in the direction they're looking (up to 10 studs)
+					local rayParams = RaycastParams.new()
+					rayParams.FilterType = Enum.RaycastFilterType.Exclude
+					rayParams.FilterDescendantsInstances = {targetRoot.Parent, player.Character}
+					local rayResult = Workspace:Raycast(targetRoot.Position, victimLookDir * 10, rayParams)
+					
+					local mimicTarget
+
+					if rayResult then
+    				mimicTarget = rayResult.Position
+    				if not mimicLastBlockedObject or mimicLastBlockedObject ~= rayResult.Instance.Name then
+        			mimicLastBlockedObject = rayResult.Instance.Name
+        			debugPrint("[MIMIC] View blocked - looking at object: " .. rayResult.Instance.Name)
+    			end
+			else
+    				mimicTarget = targetRoot.Position + victimLookDir * 10
+    				mimicLastBlockedObject = nil
+				end
+
+					local flatTarget = Vector3.new(mimicTarget.X, rootPart.Position.Y, mimicTarget.Z)
+					if (flatTarget - rootPart.Position).Magnitude > 0.1 then
+						local targetCFrame = CFrame.lookAt(rootPart.Position, flatTarget)
 						rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.12)
 						
 						if camera then
-							local lookAtPos = camera.CFrame.Position + flatDir.Unit * 10
-							local newCFrame = CFrame.lookAt(camera.CFrame.Position, lookAtPos)
+							local newCFrame = CFrame.lookAt(camera.CFrame.Position, mimicTarget)
 							camera.CFrame = camera.CFrame:Lerp(newCFrame, 0.1)
 						end
 					end
