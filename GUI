@@ -748,6 +748,7 @@ local lastPathUpdate = 0
 local currentPath = nil
 local currentWaypointIndex = 0
 local lastPathTarget = nil
+local pathFailCount = 0
 
 -- Silly Action State
 local actionActive = false
@@ -767,6 +768,12 @@ local postSillyReaction = false
 local postSillyReactionChance = 0
 local postSillyReactionTimer = 0
 local postSillyReactionType = ""
+
+local stuckEdgeTimer = 0
+local wanderTarget = nil
+local wanderStartTime = 0
+
+local lastValidPath = nil
 
 -- Timestamp function (HH:MM:SS.mmm)
 local function getTimestamp()
@@ -936,46 +943,43 @@ end
 -- ══════════════════════════════════════════════
 --  Sprint System with Crouch Detection
 -- ══════════════════════════════════════════════
+local isHoldingW = false
+
 local function holdW(enable)
 	if enable == isHoldingW then return end
 	isHoldingW = enable
-	local success = pcall(function()
+	pcall(function()
 		VirtualInputManager:SendKeyEvent(enable, Enum.KeyCode.W, false, game)
 	end)
-	if DEBUG_ENABLED then
-		print("[KEY] W " .. (enable and "DOWN" or "UP") .. " - Success: " .. tostring(success))
-	end
 end
 
-local function setSprint(enable)
-	if not SPRINT_ENABLED then return end
-	if not shiftIsSprint then return end
-	if enable == isSprinting then return end
-	
-	isSprinting = enable
-	holdW(enable)
-	local success = pcall(function()
-		VirtualInputManager:SendKeyEvent(enable, Enum.KeyCode.LeftShift, false, game)
+local function startSprint()
+	if shiftIsSprint == false then return end
+	if isSprinting then return end
+	isSprinting = true
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
 	end)
-	if DEBUG_ENABLED then
-		print("[KEY] Shift " .. (enable and "DOWN" or "UP") .. " - Success: " .. tostring(success))
-	end
+end
+
+local function stopSprint()
+	if not isSprinting then return end
+	isSprinting = false
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+	end)
 end
 
 local function testSprintBehavior(character)
 	if testPhase ~= 0 then return end
 	if shiftTested then return end
-	
 	local humanoid = character:FindFirstChild("Humanoid")
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
 	if not humanoid or not rootPart then return end
 	if humanoid.FloorMaterial == Enum.Material.Air then return end
-	
 	testPhase = 1
 	testSpeedBefore = rootPart.Velocity.Magnitude
 	testStartTime = tick()
-	
-	print("[SPRINT TEST] Holding W + Shift - check if character speeds up!")
 	holdW(true)
 	pcall(function()
 		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
@@ -984,81 +988,54 @@ end
 
 local function updateSprintTest(character)
 	if testPhase == 0 then return end
-	
 	local humanoid = character:FindFirstChild("Humanoid")
 	local rootPart = character:FindFirstChild("HumanoidRootPart")
-	if not humanoid or not rootPart then
-		testPhase = 0
-		return
+	if not humanoid or not rootPart then testPhase = 0 return end
+	if (tick() - testStartTime) < 1.5 then return end
+
+	local speedAfter = rootPart.Velocity.Magnitude
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+	end)
+	holdW(false)
+
+	local result
+	if speedAfter > testSpeedBefore + 0.5 then
+		result = "sprint"
+	elseif speedAfter < testSpeedBefore - 0.5 then
+		result = "crouch"
+	else
+		result = "none"
 	end
-	
-	local now = tick()
-	
-	if testPhase == 1 and (now - testStartTime) >= 1.5 then
-		local speedAfter = rootPart.Velocity.Magnitude
-		
-		pcall(function()
-			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-		end)
-		holdW(false)
-		
-		local result = "unknown"
-		if speedAfter > testSpeedBefore + 0.5 then
-			result = "sprint"
-			table.insert(testSamples, "sprint")
-		elseif speedAfter < testSpeedBefore - 0.5 then
-			result = "crouch"
-			table.insert(testSamples, "crouch")
-		else
-			result = "none"
-			table.insert(testSamples, "none")
+	table.insert(testSamples, result)
+	debugPrint("[SPRINT TEST] Sample " .. #testSamples .. ": " .. result)
+	testPhase = 0
+
+	if #testSamples < SHIFT_TEST_COUNT then return end
+
+	shiftTested = true
+	local sprintCount, crouchCount = 0, 0
+	for _, v in ipairs(testSamples) do
+		if v == "sprint" then sprintCount += 1
+		elseif v == "crouch" then crouchCount += 1
 		end
-		
-		debugPrint("[SPRINT TEST] Sample " .. #testSamples .. ": " .. result)
-		
-		if #testSamples >= SHIFT_TEST_COUNT then
-			shiftTested = true
-			local sprintCount = 0
-			local crouchCount = 0
-			local noneCount = 0
-			
-			for _, v in ipairs(testSamples) do
-				if v == "sprint" then sprintCount = sprintCount + 1
-				elseif v == "crouch" then crouchCount = crouchCount + 1
-				else noneCount = noneCount + 1
-				end
-			end
-			
-			if sprintCount >= SHIFT_TEST_COUNT / 2 then
-				shiftIsSprint = true
-				print("[SPRINT] Detection complete - SPRINT enabled")
-			elseif crouchCount >= SHIFT_TEST_COUNT / 2 then
-				shiftIsSprint = false
-				if not shiftTapDone then
-					shiftTapDone = true
-					print("[SPRINT] Detection complete - CROUCH detected, tapping Shift once to stand up")
-					task.wait(0.1)
-					pcall(function()
-						VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
-						task.wait(0.05)
-						VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-					end)
-				end
-			else
-				shiftIsSprint = false
-				if not shiftTapDone then
-					shiftTapDone = true
-					print("[SPRINT] Detection complete - NO sprint mechanics, tapping Shift once for Shift Lock")
-					pcall(function()
-						VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
-						task.wait(0.05)
-						VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-					end)
-				end
-			end
-			testPhase = 0
-		else
-			testPhase = 0
+	end
+
+	if sprintCount >= SHIFT_TEST_COUNT / 2 then
+		shiftIsSprint = true
+		print("[SPRINT] Detection complete - SPRINT enabled")
+	else
+		shiftIsSprint = false
+		if not shiftTapDone then
+			shiftTapDone = true
+			local reason = crouchCount >= SHIFT_TEST_COUNT / 2 and "CROUCH detected" or "NO sprint mechanics"
+			print("[SPRINT] Detection complete - " .. reason .. ", tapping Shift once")
+			task.wait(0.1)
+			pcall(function()
+				VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+				task.wait(0.05)
+				VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+			end)
 		end
 	end
 end
@@ -1085,6 +1062,8 @@ local function stopFollowing()
 	sillyLastPosition = nil
 	sillyStuckTimer = 0
 
+	holdW(false)
+
 	if followConnection then
 		followConnection:Disconnect()
 		followConnection = nil
@@ -1097,8 +1076,7 @@ local function stopFollowing()
 			pcall(function() hum:MoveTo(hum.Parent.HumanoidRootPart.Position) end)
 		end
 	end
-	setSprint(false)
-	holdW(false)
+	stopSprint()
 	Status.Text = "Stopped"
 	Status.TextColor3 = Color3.fromRGB(180, 180, 190)
 end
@@ -1213,34 +1191,6 @@ local function scanClickables(centerPos)
 	return found
 end
 
--- Function: Find all clickable objects nearby (world objects only, not players)
-local function scanClickables(centerPos)
-	local found = {}
-	local overlapParams = OverlapParams.new()
-	overlapParams.MaxParts = 100
-	
-	local partsInRadius = Workspace:GetPartBoundsInRadius(centerPos, CLICK_SEARCH_RADIUS, overlapParams)
-	
-	for _, part in ipairs(partsInRadius) do
-		-- Skip parts that belong to any player's character
-		local belongsToPlayer = false
-		for _, plr in ipairs(Players:GetPlayers()) do
-			if plr.Character and (part:IsDescendantOf(plr.Character) or part == plr.Character) then
-				belongsToPlayer = true
-				break
-			end
-		end
-		
-		if not belongsToPlayer then
-			local obj = part:FindFirstChildWhichIsA("ProximityPrompt") or part:FindFirstChildWhichIsA("ClickDetector")
-			if obj then
-				table.insert(found, obj)
-			end
-		end
-	end
-	return found
-end
-
 -- NEW Simple function: Check if someone is between follower and victim
 local function isSomeoneBlocking(rootPart, targetRoot)
 	local direction = (targetRoot.Position - rootPart.Position).Unit
@@ -1291,6 +1241,7 @@ local function startFollowing()
 	currentPath = nil
 	currentWaypointIndex = 0
 	lastPathTarget = nil
+	pathFailCount = 0
 
 	victimIsMoving = false
 	victimStillTimer = 0
@@ -1307,10 +1258,10 @@ local function startFollowing()
 	sillyStuckTimer = 0
 	
 	shiftTested = false
-	testPhase = 0
-	testSamples = {}
-	shiftIsSprint = true
-	shiftTapDone = false
+    testPhase = 0
+    testSamples = {}
+    shiftIsSprint = true
+    shiftTapDone = false
 
 	print("============================================")
 	print("[START] Following: " .. targetPlayer.Name)
@@ -1341,6 +1292,20 @@ local function startFollowing()
 		local targetHumanoid = targetChar:FindFirstChild("Humanoid")
 		local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not rootPart or not targetRoot then return end
+
+		local gyro = rootPart:FindFirstChild("SequenceGyro")
+		if (sillyActive or actionActive) and not gyro then
+			gyro = Instance.new("BodyGyro")
+			gyro.MaxTorque = Vector3.new(1, 1, 1) * 40000
+			gyro.P = 10000
+			gyro.D = 500
+			gyro.Name = "SequenceGyro"
+			gyro.Parent = rootPart
+			humanoid.AutoRotate = false
+		elseif not sillyActive and not actionActive and gyro then
+			gyro:Destroy()
+			humanoid.AutoRotate = true
+		end
 
 		local followerSeated = isFollowerSeated()
 		local targetSeated = isVictimSeated(targetHumanoid)
@@ -1690,19 +1655,20 @@ local function startFollowing()
 					
 					if actionIndex <= #actionSequence then
 						local data = actionSequence[actionIndex]
-						local movePos = targetRoot.Position + data[1]
+						local movePos = (targetRoot.CFrame * CFrame.new(data[1])).Position
 						local victimAngle = math.atan2(-targetRoot.CFrame.LookVector.X, -targetRoot.CFrame.LookVector.Z)
 						local targetAngle = data[2] + victimAngle
 						local doJump = data[3]
 						local doStop = data[4]
 						
 						-- Smoothly rotate to the recorded angle
-						local currentAngle = math.atan2(-rootPart.CFrame.LookVector.X, -rootPart.CFrame.LookVector.Z)
-						local smoothAngle = lerpAngle(currentAngle, targetAngle, deltaTime * 12)
-						rootPart.CFrame = CFrame.new(rootPart.Position) * CFrame.Angles(0, smoothAngle, 0)
+						if gyro then
+							gyro.CFrame = CFrame.new(rootPart.Position) * CFrame.Angles(0, targetAngle, 0)
+						end
 						
 						-- Handle stopped frames
 						if doStop then
+							holdW(false)
 							smoothMove(humanoid, rootPart.Position)
 							actionStuckTimer = 0
 							actionLastPosition = rootPart.Position
@@ -1713,6 +1679,7 @@ local function startFollowing()
 							end
 							return
 						else
+							holdW(true)
 							actionStopTimer = 0
 						end
 						
@@ -1739,6 +1706,7 @@ local function startFollowing()
 					else
 						-- Action sequence complete
 						debugPrint("[ACTION] Silly action completed!")
+						holdW(false)
 						actionActive = false
 						actionSequence = nil
 						actionCooldown = true
@@ -2136,17 +2104,18 @@ local function startFollowing()
 					if sillyIndex <= #currentSillySequence then
 			local data = currentSillySequence[sillyIndex]
 
-			local movePos     = targetRoot.Position + data[1]
+			local movePos = (targetRoot.CFrame * CFrame.new(data[1])).Position
 			local victimAngle = math.atan2(-targetRoot.CFrame.LookVector.X, -targetRoot.CFrame.LookVector.Z)
 			local targetAngle = data[2] + victimAngle
 			local doJump      = data[3]
 			local doStop      = data[4]
 
-			local currentAngle = math.atan2(-rootPart.CFrame.LookVector.X, -rootPart.CFrame.LookVector.Z)
-			local smoothAngle  = lerpAngle(currentAngle, targetAngle, deltaTime * 12)
-			rootPart.CFrame = CFrame.new(rootPart.Position) * CFrame.Angles(0, smoothAngle, 0)
+			if gyro then
+				gyro.CFrame = CFrame.new(rootPart.Position) * CFrame.Angles(0, targetAngle, 0)
+			end
 
 				if doStop then
+					holdW(false)
 					smoothMove(humanoid, rootPart.Position)
 					sillyStuckTimer = 0
 					sillyLastPosition = rootPart.Position
@@ -2157,6 +2126,7 @@ local function startFollowing()
 					end
 					return
 				else
+					holdW(true)
 					sillyStopTimer = 0
 				end
 
@@ -2179,6 +2149,7 @@ local function startFollowing()
 				end
 			else
 				debugPrint("[SILLY] Completed")
+				holdW(false)
 				sillyActive = false
 				sillyJustCompleted = true
 				humanoid.Jump = false
@@ -2209,11 +2180,10 @@ local function startFollowing()
 			if not sillyActive and not actionActive and victimStillTimer < 8 and not sillyJustCompleted then
 				debugPrint("[SIDE] Entering side-stand (inside 8 studs, victim stopped)")
 				inSideStand = true
-				holdW(false)
-				setSprint(false)
+				stopSprint()
 				
 							if not shiftIsSprint then
-				local shiftLockOn = (player.DevCameraOcclusionMode == Enum.DevCameraOcclusionMode.Invisicam)
+				local shiftLockOn = (UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter)
 				if shiftLockOn then
 					pcall(function()
 						VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
@@ -2314,33 +2284,32 @@ local function startFollowing()
 		end
 
 		-- ===== CHASE WHEN OUTSIDE 8 STUDS =====
-		if distance > EXIT_DISTANCE then
-			if not isSafePosition(targetRoot.Position) then
-				holdW(false)
-				setSprint(false)
-				debugPrint("[ANTI-VOID] Target position unsafe - holding position")
-				return
-			end
-
+			if distance > EXIT_DISTANCE then
 			holdW(true)
-			
-			if distance >= SPRINT_DISTANCE and not shiftTested and testPhase == 0 and victimHasMovedSinceStart then
-				testSprintBehavior(character)
-			end
-			
-			if distance >= SPRINT_DISTANCE and shiftTested and shiftIsSprint then
-				setSprint(true)
-			elseif distance <= 10 then
-				setSprint(false)
-			end
+				if not isSafePosition(targetRoot.Position) then
+		stopSprint()
+		smoothMove(humanoid, rootPart.Position)
+		return
+	end
+
+		if distance >= SPRINT_DISTANCE and not shiftTested and testPhase == 0 then
+			testSprintBehavior(character)
+		end
+		if distance >= SPRINT_DISTANCE and shiftTested and shiftIsSprint then
+			startSprint()
+		elseif distance <= 10 then
+			stopSprint()
+		end
 			
 			if distance < DIRECT_MOVE_DISTANCE then
+				holdW(true)
 				if isSafePosition(targetRoot.Position) then
 					smoothMove(humanoid, targetRoot.Position)
 				else
 					smoothMove(humanoid, rootPart.Position)
 				end
 				currentPath = nil
+                holdW(false)
 				return
 			end
 
@@ -2385,12 +2354,15 @@ local function startFollowing()
 					end)
 					if success and path.Status == Enum.PathStatus.Success then
 						currentPath = path
+                        lastValidPath = path
 						currentWaypointIndex = 1
 						lastPathTarget = targetRoot.Position
 						debugPrint("[PATH] Path computed successfully with " .. #path:GetWaypoints() .. " waypoints")
+						pathFailCount = 0
 					else
 						currentPath = nil
 						debugPrint("[PATH] Path computation failed")
+						pathFailCount = pathFailCount + 1
 					end
 				else
 					currentPath = nil
@@ -2424,24 +2396,38 @@ local function startFollowing()
 						currentPath = nil
 					end
 				end
-			else
-				if isSafePosition(targetRoot.Position) then
-					smoothMove(humanoid, targetRoot.Position)
-				else
-					smoothMove(humanoid, rootPart.Position)
-				end
-			end
-		end
-		
-		if distance <= W_RELEASE_DISTANCE then
-			if not isSprinting then
-				holdW(false)
-			end
-			pcall(function()
-				VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-			end)
-		end
-	end)
+    	else
+    if pathFailCount >= 4 and lastValidPath then
+        local waypoints = lastValidPath:GetWaypoints()
+        local safeWP = nil
+        for i = math.max(1, currentWaypointIndex - 5), 1, -1 do
+            local wp = waypoints[i]
+            if wp and isSafePosition(wp.Position) then
+                local testPos = wp.Position + Vector3.new(0, 0, 2)
+                if isSafePosition(testPos) then
+                    safeWP = wp.Position
+                    break
+                end
+            end
+        end
+        if safeWP then
+            holdW(true)
+            smoothMove(humanoid, safeWP)
+            if (rootPart.Position - safeWP).Magnitude < 3 then
+                pathFailCount = 0
+                lastValidPath = nil
+                holdW(false)
+                debugPrint("[PATH] Reached safe waypoint - retrying")
+            end
+        else
+            smoothMove(humanoid, rootPart.Position)
+        end
+    else
+        smoothMove(humanoid, rootPart.Position)
+    end
+end
+        end
+    end)
 end
 
 -- ══════════════════════════════════════════════
@@ -2517,11 +2503,9 @@ player.CharacterAdded:Connect(function()
 		lastPathUpdate = 0
 		print("[RESPAWN] Path cleared - will recompute")
 	end
-	shiftTested = false
+	sprintLearned = false
+	shiftIsSprint = nil
 	testPhase = 0
-	testSamples = {}
-	shiftIsSprint = true
-	shiftTapDone = false
 end)
 
 print("=== Follower Script Ready ===")
