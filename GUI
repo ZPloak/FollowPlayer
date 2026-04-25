@@ -1412,12 +1412,16 @@ local function startFollowing()
 								holdW(true)
 								smoothMove(humanoid, seatPos)
 								if (rootPart.Position - seatPos).Magnitude < 3 then
-									humanoid:MoveTo(rootPart.Position)
-									holdW(false)  -- Stop movement
-									task.wait(0.2)  -- Brief pause to stabilize
-									humanoid.Sit = true
-									break
-								end
+							holdW(false)
+							humanoid:MoveTo(closestSeat.part.Position)
+							task.wait(0.4)
+							if closestSeat.part:IsA("Seat") or closestSeat.part:IsA("VehicleSeat") then
+								closestSeat.part:Sit(humanoid)
+							else
+								humanoid.Sit = true
+							end
+							break
+						end
 								task.wait(0.1)
 								walkTime = walkTime + 0.1
 							end
