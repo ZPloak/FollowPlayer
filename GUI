@@ -1191,6 +1191,23 @@ local function scanClickables(centerPos)
 	return found
 end
 
+local function clickRandomObject()
+	if #clickablesCache == 0 then return false end
+	local obj = clickablesCache[math.random(1, #clickablesCache)]
+	if not obj or not obj.Parent then return false end
+	local success = pcall(function()
+		local holdTime = (obj:IsA("ProximityPrompt") and obj.HoldDuration) or 0
+		if obj:IsA("ProximityPrompt") then
+			obj:InputHoldBegin()
+			task.wait(math.max(holdTime, 0.05))
+			obj:InputHoldEnd()
+		elseif obj:IsA("ClickDetector") then
+			fireclickdetector(obj)
+		end
+	end)
+	return success
+end
+
 -- NEW Simple function: Check if someone is between follower and victim
 local function isSomeoneBlocking(rootPart, targetRoot)
 	local direction = (targetRoot.Position - rootPart.Position).Unit
@@ -1388,10 +1405,15 @@ local function startFollowing()
 							local seatPos = closestSeat.part.Position
 							local walkTime = 0
 							while walkTime < 3 do
-								if not targetSeated or followerSeated then break end
+								if not targetSeated or followerSeated then
+									holdW(false)
+									break
+								end
+								holdW(true)
 								smoothMove(humanoid, seatPos)
 								if (rootPart.Position - seatPos).Magnitude < 3 then
-									humanoid:MoveTo(rootPart.Position)  -- Stop movement
+									humanoid:MoveTo(rootPart.Position)
+									holdW(false)  -- Stop movement
 									task.wait(0.2)  -- Brief pause to stabilize
 									humanoid.Sit = true
 									break
@@ -1894,12 +1916,17 @@ local function startFollowing()
 						local moveTime = 0
 						while moveTime < 1.5 do
 							if not targetRoot or not rootPart then break end
+							holdW(true)
 							smoothMove(humanoid, finalTarget)
-							if (rootPart.Position - finalTarget).Magnitude < 1.5 then break end
+							if (rootPart.Position - finalTarget).Magnitude < 1.5 then
+							holdW(false)
+							break
+						end
 							task.wait(0.1)
 							moveTime = moveTime + 0.1
 						end
 					end
+					holdW(false)
 					
 					debugPrint("[SOCIAL] Finished moving")
 					
@@ -2214,8 +2241,10 @@ local function startFollowing()
 				local distToSide = (rootPart.Position - sideTargetPosition).Magnitude
 				if distToSide <= 2 then
 					sideReached = true
+					holdW(false)
 					debugPrint("[SIDE] Reached side position")
 				else
+					holdW(true)
 					smoothMove(humanoid, sideTargetPosition)
 				end
 			end
@@ -2288,6 +2317,7 @@ local function startFollowing()
 			holdW(true)
 				if not isSafePosition(targetRoot.Position) then
 		stopSprint()
+		holdW(false)
 		smoothMove(humanoid, rootPart.Position)
 		return
 	end
@@ -2309,11 +2339,10 @@ local function startFollowing()
 					smoothMove(humanoid, rootPart.Position)
 				end
 				currentPath = nil
-                holdW(false)
 				return
 			end
 
-			local needRecompute = false
+						local needRecompute = false
 			if not currentPath then
 				needRecompute = true
 			elseif lastPathTarget then
@@ -2396,39 +2425,17 @@ local function startFollowing()
 						currentPath = nil
 					end
 				end
-    	else
-    if pathFailCount >= 4 and lastValidPath then
-        local waypoints = lastValidPath:GetWaypoints()
-        local safeWP = nil
-        for i = math.max(1, currentWaypointIndex - 5), 1, -1 do
-            local wp = waypoints[i]
-            if wp and isSafePosition(wp.Position) then
-                local testPos = wp.Position + Vector3.new(0, 0, 2)
-                if isSafePosition(testPos) then
-                    safeWP = wp.Position
-                    break
-                end
-            end
-        end
-        if safeWP then
-            holdW(true)
-            smoothMove(humanoid, safeWP)
-            if (rootPart.Position - safeWP).Magnitude < 3 then
-                pathFailCount = 0
-                lastValidPath = nil
-                holdW(false)
-                debugPrint("[PATH] Reached safe waypoint - retrying")
-            end
-        else
-            smoothMove(humanoid, rootPart.Position)
-        end
-    else
-        smoothMove(humanoid, rootPart.Position)
-    end
-end
-        end
+					else
+				-- No path available - walk directly toward target (NEVER stop)
+				if isSafePosition(targetRoot.Position) then
+					smoothMove(humanoid, targetRoot.Position)
+				else
+					smoothMove(humanoid, rootPart.Position)
+				end
+		end
+	end
     end)
-end
+end 
 
 -- ══════════════════════════════════════════════
 --  Button wiring
@@ -2506,6 +2513,20 @@ player.CharacterAdded:Connect(function()
 	sprintLearned = false
 	shiftIsSprint = nil
 	testPhase = 0
+end)
+
+player.CharacterAdded:Connect(function(character)
+	local humanoid = character:WaitForChild("Humanoid")
+	humanoid.Died:Connect(function()
+		shiftTested = false
+		testPhase = 0
+		testSamples = {}
+		shiftIsSprint = true
+		shiftTapDone = false
+		stopSprint()
+		holdW(false)
+		debugPrint("[SPRINT] Reset on death - will retest on respawn")
+	end)
 end)
 
 print("=== Follower Script Ready ===")
