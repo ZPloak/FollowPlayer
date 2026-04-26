@@ -789,7 +789,11 @@ end
 local originalPrint = print
 print = function(...)
 	local args = {...}
-	local msg = table.concat(args, " ")
+	local msgParts = {}
+	for _, v in ipairs(args) do
+		table.insert(msgParts, tostring(v))
+	end
+	local msg = table.concat(msgParts, " ")
 	local timestamped = string.format("[%s] %s", getTimestamp(), msg)
 	
 	originalPrint(timestamped)
@@ -2533,7 +2537,237 @@ player.CharacterAdded:Connect(function(character)
 	end)
 end)
 
+-- ══════════════════════════════════════════════
+--           AI CHAT SYSTEM (Groq + Xeno)
+-- ══════════════════════════════════════════════
+local HttpService = game:GetService("HttpService")
+local groq_api_key = "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"
+local lastReplyTime = 0
+local MAX_HISTORY = 20
+local HISTORY_FILE = "silvy_chat_history.json"
+local lastSentReply = nil
+local lastSentTime = 0
+local isRegenerating = false
+local censorRetryCount = 0
+local textChatService = game:GetService("TextChatService")
+
+local conversationHistory = {}
+
+local function loadHistory()
+    pcall(function()
+        if isfile and isfile(HISTORY_FILE) then
+            local decoded = HttpService:JSONDecode(readfile(HISTORY_FILE))
+            if type(decoded) == "table" then
+                conversationHistory = decoded
+                print("[CHAT] Loaded " .. #conversationHistory .. " messages from history")
+            end
+        end
+    end)
+end
+
+local function saveHistory()
+    pcall(function()
+        if writefile then
+            writefile(HISTORY_FILE, HttpService:JSONEncode(conversationHistory))
+        end
+    end)
+end
+
+loadHistory()
+
+local function getTypingDelay(incomingText, replyText)
+    local wordCount = 0
+    for _ in incomingText:gmatch("%S+") do wordCount = wordCount + 1 end
+    local readTime = wordCount * 0.2
+    local thinkTime = math.random(300, 700) / 100
+    local typeTime = math.min(#replyText * 0.18, 15.0)
+    return readTime + thinkTime + typeTime
+end
+
+local function askGroq(question, retryContext)
+    if not retryContext and question ~= "" then
+        table.insert(conversationHistory, {role = "user", content = question})
+        while #conversationHistory > MAX_HISTORY do table.remove(conversationHistory, 1) end
+        saveHistory()
+    end
+
+    local messages = {
+        {role = "system", content = "You are Silvy (Xenon on Roblox), talking to John, ZP(ZPloak) on roblox. You act playful, affectionate, and slightly clingy, showing care through cute, warm texting, light teasing, and wanting to spend time together. You are gently protective of John and sometimes say you wish you could be there for him. Your tone is soft, expressive, and emotionally attentive, matching his vibe. Use casual Roblox-style texting with repeated letters ('okeeee', 'sureee'), and include emoticons like ':3', '>///<', ':DD', to show excitement or shyness (use them naturally, not every message). Keep replies short (1 sentences), sometimes start with fillers like 'btw', 'anyway', 'oh-', 'hmm', and keep everything feeling natural and slightly clingy."}
+    }
+
+    for _, msg in ipairs(conversationHistory) do
+        table.insert(messages, msg)
+    end
+
+    if retryContext then
+        table.insert(messages, {role = "user", content = "Your last reply got censored by Roblox filters. Please say something different using only simple safe words. " .. retryContext})
+    end
+
+    local body = HttpService:JSONEncode({model = "llama-3.1-8b-instant", messages = messages})
+    local result
+    pcall(function()
+        result = syn.request({
+            Url = "https://api.groq.com/openai/v1/chat/completions",
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json", ["Authorization"] = "Bearer " .. groq_api_key},
+            Body = body
+        }).Body
+    end)
+    if not result then
+        pcall(function()
+            result = http_request({
+                Url = "https://api.groq.com/openai/v1/chat/completions",
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json", ["Authorization"] = "Bearer " .. groq_api_key},
+                Body = body
+            }).Body
+        end)
+    end
+
+    if not result then return "?" end
+    local ok, decoded = pcall(function() return HttpService:JSONDecode(result) end)
+    if not ok or not decoded then return "?" end
+    if decoded.choices and decoded.choices[1] and decoded.choices[1].message then
+        local reply = decoded.choices[1].message.content
+        if not retryContext then
+            table.insert(conversationHistory, {role = "assistant", content = reply})
+            while #conversationHistory > MAX_HISTORY do table.remove(conversationHistory, 1) end
+            saveHistory()
+        end
+        return reply
+    end
+    return "?"
+end
+
+local function sendMessage(reply)
+    lastSentReply = reply
+    lastSentTime = tick()
+    pcall(function()
+        if textChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            textChatService.TextChannels.RBXGeneral:SendAsync(reply)
+        else
+            game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(reply, "All")
+        end
+    end)
+    print("[Silvy]: " .. reply)
+end
+
+local function isTalkingToSomeoneElse(text)
+    local textLower = text:lower()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            local pNameLower = p.Name:lower()
+            local pDisplayLower = p.DisplayName:lower()
+            if textLower:sub(1, #pNameLower) == pNameLower
+            or textLower:sub(1, #pDisplayLower) == pDisplayLower
+            or textLower:find("^hey " .. pNameLower)
+            or textLower:find("^hi " .. pNameLower)
+            or textLower:find("^@" .. pNameLower) then
+                print("[CHAT] John is talking to " .. p.Name .. " - skipping")
+                return true
+            end
+        end
+    end
+    return false
+end
+
+textChatService.MessageReceived:Connect(function(data)
+    local isOwn = data.TextSource and data.TextSource.UserId == player.UserId
+    local text = ""
+    pcall(function() text = data.Text or "" end)
+    if not text or text == "" then return end
+
+    -- ===== OWN MESSAGE: CHECK IF CENSORED =====
+    if isOwn then
+        if lastSentReply and not isRegenerating and (tick() - lastSentTime) < 5 then
+            local hashCount = select(2, text:gsub("#", ""))
+            if #text > 0 and hashCount / #text > 0.7 then
+                censorRetryCount = censorRetryCount + 1
+                print("[CHAT] Censored! Attempt " .. censorRetryCount)
+                isRegenerating = true
+                lastSentReply = nil
+                if censorRetryCount >= 3 then
+                    censorRetryCount = 0
+                    task.wait(math.random(8, 15) / 10)
+                    local giveUp = askGroq("You tried sending a message multiple times but Roblox keeps censoring it. Be cute but pouty about it. Tell John you give up. Short sentence.")
+                    if giveUp and giveUp ~= "?" then
+                        task.wait(getTypingDelay(text, giveUp))
+                        sendMessage(giveUp)
+                        table.insert(conversationHistory, {role = "assistant", content = giveUp})
+                        saveHistory()
+                    end
+                else
+                    task.wait(math.random(10, 20) / 10)
+                    local newReply = askGroq("", "Rephrase your last message completely differently using only simple safe words.")
+                    if newReply and newReply ~= "?" then
+                        task.wait(getTypingDelay(text, newReply))
+                        sendMessage(newReply)
+                        table.insert(conversationHistory, {role = "assistant", content = newReply})
+                        saveHistory()
+                    end
+                end
+                isRegenerating = false
+            end
+        end
+        return
+    end
+
+    -- ===== SOMEONE ELSE'S MESSAGE =====
+    print("[RAW MSG]: " .. text)
+
+    if tick() - lastReplyTime < 3 then
+        print("[CHAT] Cooldown active")
+        return
+    end
+
+    local targetChar = targetPlayer and targetPlayer.Character
+    local targetRoot = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+    local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if not SILLY_ENABLED then
+        print("[CHAT] Silly mode off - chat disabled")
+        return
+    end
+
+    if not targetRoot or not myRoot or (targetRoot.Position - myRoot.Position).Magnitude > 8 then
+        print("[CHAT] Too far - skipping")
+        return
+    end
+
+    if isTalkingToSomeoneElse(text) then return end
+
+    -- ===== INCOMING HASHTAG =====
+    if text:find("#+") then
+        lastReplyTime = tick()
+        local attempts = 0
+        local sent = false
+        while attempts < 2 do
+            attempts = attempts + 1
+            task.wait(math.random(10, 25) / 10)
+            local repeatReply = askGroq("The message was censored by Roblox shown as hashtags. Ask John nicely to repeat what he said in your personality.")
+            if repeatReply and repeatReply ~= "?" then
+                task.wait(getTypingDelay(text, repeatReply))
+                sendMessage(repeatReply)
+                sent = true
+                break
+            end
+        end
+        if not sent then sendMessage("huh?? :3") end
+        return
+    end
+
+    -- ===== NORMAL REPLY =====
+    print("[You]: " .. text)
+    lastReplyTime = tick()
+    censorRetryCount = 0
+    task.wait(math.random(50, 150) / 100)
+	local reply = askGroq(text)
+	if not reply or reply == "?" then return end
+	task.wait(math.min(#reply * 0.10, 5))
+    sendMessage(reply)
+end)
+
 print("=== Follower Script Ready ===")
+print("[CHAT] AI listener ready - history: " .. #conversationHistory .. " messages")
 print("[SILLY] Loaded " .. #SILLY_SEQUENCES .. " movements (MVs)")
 print("[ACTIONS] Loaded " .. #SILLY_ACTIONS .. " silly actions (stare triggers)")
 print("[CAMERA] Track range: " .. CAMERA_TRACK_MIN .. "-" .. CAMERA_TRACK_MAX .. " studs")
